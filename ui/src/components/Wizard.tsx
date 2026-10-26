@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { api, asCmdError, errText, isTauri, type BriefQA, type BriefQuestion, type DirReport, type ProviderView, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
 import { applyCreateFailure, type CreateStep } from '../createProgress'
 import { useUiStore } from '../store'
-import { providerStepReady } from '../providerGate'
+import { providerKeyReady, providerStepReady } from '../providerGate'
 import { Button } from '@/components/ui/button'
 import { Icon } from './Icon'
 import { GenerationRetry, StopGeneration, type GenerationFailure } from './WizardGeneration'
@@ -52,6 +52,9 @@ export function Wizard({ onDone, onCancel, seed }: {
   const [selectedRole, setSelectedRole] = useState<string | null>(null)
   // 本次打开向导后在详情区编辑过的角色：详情头部显示「改动已存入向导草稿」
   const [editedRoles, setEditedRoles] = useState<Set<string>>(new Set())
+  // 票 17：角色详情里换的头像。项目还不存在，图只留在内存（不进 localStorage 草稿：几张 2MB
+  // 图会撑爆配额），建项目时随单下发、核规整后按角色写入；中途退出续做时需重选。
+  const [roleAvatars, setRoleAvatars] = useState<Record<string, string>>({})
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [providersLoaded, setProvidersLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -196,12 +199,12 @@ export function Wizard({ onDone, onCancel, seed }: {
     if (step === 'roles' && !providersLoaded) recheckKeys()
   }, [step, providersLoaded, recheckKeys])
 
-  // 槽就绪 = 绑定存在 && 供应商启用 && key 已存（本槽 → default 兜底，同回合内核解析序）
+  // 槽就绪 = 绑定存在 && 供应商启用 && key 已存或本机回环端点（票 25；本槽 → default 兜底，同回合内核解析序）
   const slotReady = useCallback(
     (slot: string) => {
       const b = doc.slots[slot] ?? doc.slots.default
       const provider = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
-      return !!(provider && provider.enabled && provider.key_set)
+      return !!(provider && provider.enabled && providerKeyReady(provider))
     },
     [doc],
   )
@@ -462,6 +465,8 @@ export function Wizard({ onDone, onCancel, seed }: {
         fastpathRole: draft.fastPath ? draft.fastRole : null,
         initGit: draft.initGit,
         agentsMd: agentsToWrite(),
+        roleAvatars: pickedRoles.filter((tp) => roleAvatars[tp.def.name])
+          .map((tp) => ({ role: tp.def.name, data_url: roleAvatars[tp.def.name] })),
       }, markStep)
       localStorage.removeItem(DRAFT_KEY)
       onDone()
@@ -527,7 +532,7 @@ export function Wizard({ onDone, onCancel, seed }: {
   const messages = (
     <>
       {note && <div role="status" className="mt-3 text-[12.5px] text-ink-2">{note}</div>}
-      {err && <div role="alert" className="mt-3 text-[12.5px] text-red">{err}</div>}
+      {err && <div role="alert" className="mt-3 text-[12.5px] text-red-ink">{err}</div>}
       <GenerationRetry failure={genFail} step={step} />
     </>
   )
@@ -614,6 +619,11 @@ export function Wizard({ onDone, onCancel, seed }: {
           setEditedRoles((s) => { const n = new Set(s); n.delete(name); return n })
         }}
         rolesBusy={rolesBusy}
+        avatars={roleAvatars}
+        onAvatar={(name, url) => setRoleAvatars((m) => {
+          const { [name]: _drop, ...rest } = m
+          return url ? { ...rest, [name]: url } : rest
+        })}
         doc={doc}
         aiDraft={{
           label: t(showRedraft ? 'wizard.aiRedraft' : 'wizard.aiDraft'),

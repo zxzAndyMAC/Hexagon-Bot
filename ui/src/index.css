@@ -25,7 +25,9 @@
   --hover-2: oklch(93.3% .003 247.86);
   --ink: oklch(24.7% .006 258.361);
   --ink-2: oklch(50.6% .01 264.477);
-  --ink-3: oklch(69.5% .009 264.505);
+  /* --ink-3 两套都调到刚好 ≥4.5:1（owner-followups-1015 票 09，foundations「对比度」）：旧值浅 69.5% 只有 2.7:1、
+     深 54.1% 只有 3.1:1。浅色对 --surface/--page 取界，深色对 --surface/--page/--canvas 取界；表见 scripts/contrast.mjs。 */
+  --ink-3: oklch(55.5% .009 264.505);
   --line: oklch(94.6% .003 264.542);
   --line-strong: oklch(91.2% .005 258.326);
   --line-soft: oklch(96.6% .002 264.542);
@@ -40,15 +42,28 @@
   --bubble: var(--canvas);
   /* §1.3 强调色与语义色 */
   --accent: oklch(62.6% .205 254.947);
-  --accent-ink: oklch(55.6% .187 255.617);
+  /* 票 09：--accent-ink 55.6% → 54.2%（在 --accent-tint 上原只有 4.3:1，info 胶囊与点名原子块不达标）。 */
+  --accent-ink: oklch(54.2% .187 255.617);
   --accent-tint: oklch(96% .019 252.878);
+  /* 主按钮底（白字）。浅色就是 --accent-ink；深色另取一档（深色 --accent-ink 是浅字色，白字压不上去）。
+     --accent 本体（链接、焦点环、info 点）不动——白字在它上面浅 3.6:1 / 深 2.9:1，所以主按钮不再吃它。 */
+  --accent-strong: var(--accent-ink);
+  /* 语义色分两档（票 09）：基色只给点 / 图标 / 填充；文字（胶囊字、行内语义文字）吃 -ink。
+     浅色基色在淡底上只有 2.7–4.1:1，-ink 同色相同色度压亮度到刚好 ≥4.5:1（淡底、--surface、--canvas 三者取最差）。 */
   --green: oklch(60.3% .155 150.883);
+  --green-ink: oklch(51.5% .155 150.883);
   --green-tint: oklch(95.8% .017 159.118);
   --orange: oklch(68.9% .179 49.902);
+  --orange-ink: oklch(55% .179 49.902);
   --orange-tint: oklch(96.4% .021 67.581);
   --red: oklch(62.1% .192 23.042);
+  --red-ink: oklch(55.5% .192 23.042);
   --red-tint: oklch(95.6% .017 17.462);
+  /* 票 24（2026-10-18 负责人裁决）：实心危险按钮底（白字），仿 --accent-strong。浅色就是 --red-ink（5.2:1）；
+     --red 本体（点、图标、填充、目标圈）不动——白字在它上面浅 3.98 / 深 3.31:1，所以危险按钮不再吃它。 */
+  --red-strong: var(--red-ink);
   --violet: oklch(58% .19 292);
+  --violet-ink: oklch(55.5% .19 292);
   --violet-tint: oklch(96% .02 292);
   /* §1.3 浅深差异：浅色语义胶囊带同色细描边，深色不带（取值见 dark 段 = 0） */
   --tint-ring: 1;
@@ -89,10 +104,11 @@
      不在此定义，只在 @theme inline 里映射（规范：不得把 Hexagon --accent 改名） */
   --radius: var(--r-card);
   /* 布局与组件局部变量（票 03 / 07）：对话列宽（画布并排时主区覆写为 560，foundations §5）、
-     上下文圆环进度与环色（D5，ContextMeter 行内覆写）。 */
+     上下文圆环进度与环色（D5，ContextMeter 行内覆写）、节点轨鱼眼倍数（C15，NodeRail 逐道行内覆写，票 27）。 */
   --col-w: 720px;
   --p: 0;
   --ring-c: var(--ink-2);
+  --rail-mag: 1;
 }
 
 [data-theme='dark'],
@@ -106,7 +122,7 @@
   --hover-2: oklch(31.8% .007 274.747);
   --ink: oklch(96.4% .002 247.839);
   --ink-2: oklch(73.1% .008 260.731);
-  --ink-3: oklch(54.1% .01 264.484);
+  --ink-3: oklch(63.5% .01 264.484);
   --line: oklch(30.8% .006 258.354);
   --line-strong: oklch(35.6% .007 264.474);
   --line-soft: oklch(27.8% .006 258.354);
@@ -118,13 +134,21 @@
   --accent: oklch(68% .173 253.301);
   --accent-ink: oklch(78.8% .113 248.33);
   --accent-tint: oklch(68% .173 253.301 / .16);
+  --accent-strong: oklch(56.5% .173 253.301);
+  /* 深色基色在淡底上除红（3.9:1）外已达标；-ink 绿 / 橙 / 紫取基色同值，红提亮到 70.5%。 */
   --green: oklch(70.5% .154 153.814);
+  --green-ink: oklch(70.5% .154 153.814);
   --green-tint: oklch(70.5% .154 153.814 / .14);
   --orange: oklch(74.6% .156 55.642);
+  --orange-ink: oklch(74.6% .156 55.642);
   --orange-tint: oklch(74.6% .156 55.642 / .14);
   --red: oklch(66.6% .18 21.433);
+  --red-ink: oklch(70.5% .18 21.433);
   --red-tint: oklch(66.6% .18 21.433 / .14);
+  /* 深色 --red-ink 是浅字色（70.5%），白字压不上去；同色相同色度压到 56.5%（与 --accent-strong 同档），白字 5.0:1。 */
+  --red-strong: oklch(56.5% .18 21.433);
   --violet: oklch(72% .14 292);
+  --violet-ink: oklch(72% .14 292);
   --violet-tint: oklch(72% .14 292 / .15);
   --tint-ring: 0;
   --chart-1: oklch(68% .173 253.301);
@@ -153,14 +177,14 @@
   --color-muted-foreground: var(--ink-2);
   --color-accent: var(--hover);
   --color-accent-foreground: var(--ink);
-  --color-primary: var(--accent);
+  --color-primary: var(--accent-strong);
   --color-primary-foreground: white;
   --color-secondary: var(--canvas);
   --color-secondary-foreground: var(--ink-2);
   --color-border: var(--line);
   --color-input: var(--line-strong);
   --color-ring: var(--accent);
-  --color-destructive: var(--red);
+  --color-destructive: var(--red-strong);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -184,13 +208,19 @@
   --color-scrim: var(--scrim);
   --color-accent-ink: var(--accent-ink);
   --color-accent-tint: var(--accent-tint);
+  --color-accent-strong: var(--accent-strong);
   --color-green: var(--green);
+  --color-green-ink: var(--green-ink);
   --color-green-tint: var(--green-tint);
   --color-orange: var(--orange);
+  --color-orange-ink: var(--orange-ink);
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
+  --color-red-ink: var(--red-ink);
   --color-red-tint: var(--red-tint);
+  --color-red-strong: var(--red-strong);
   --color-violet: var(--violet);
+  --color-violet-ink: var(--violet-ink);
   --color-violet-tint: var(--violet-tint);
 
   --font-sans: var(--font);
@@ -202,6 +232,8 @@
   --animate-hx-sh: hx-sh 2s linear infinite;
   --animate-hx-spin: hx-spin .8s linear infinite;
   --animate-hx-pulse: hx-pulse 1.6s ease-in-out infinite;
+  /* 单次脉冲（foundations §6，owner-followups-1015 #11）：会话胶囊转入 failed / reconnecting 时提醒一次，不循环 */
+  --animate-hx-pulse-once: hx-pulse 1s ease-in-out 1;
   --animate-hx-skl: hx-skl 1.4s linear infinite;
   --animate-hx-jumpin: hx-jumpin 180ms var(--ease) both;
   @keyframes hx-px { 0%, 100% { opacity: .2; } 40% { opacity: 1; } }
@@ -326,10 +358,10 @@ body {
 }
 /* 票 15（foundations §10）：amber（待决）→ orange · ok → green · err → red · flag → violet · warn（旧值为蓝）→ accent；
    描边按 §1.3 浅深差异规则走 color-mix × --tint-ring（深色不描边）。 */
-.chip.amber { color: var(--orange); border-color: color-mix(in oklch, var(--orange) calc(30% * var(--tint-ring)), transparent); background: var(--orange-tint); }
-.chip.ok { color: var(--green); border-color: color-mix(in oklch, var(--green) calc(28% * var(--tint-ring)), transparent); background: var(--green-tint); }
-.chip.err { color: var(--red); border-color: color-mix(in oklch, var(--red) calc(26% * var(--tint-ring)), transparent); background: var(--red-tint); }
-.chip.flag { color: var(--violet); border-color: color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent); background: var(--violet-tint); }
+.chip.amber { color: var(--orange-ink); border-color: color-mix(in oklch, var(--orange) calc(30% * var(--tint-ring)), transparent); background: var(--orange-tint); }
+.chip.ok { color: var(--green-ink); border-color: color-mix(in oklch, var(--green) calc(28% * var(--tint-ring)), transparent); background: var(--green-tint); }
+.chip.err { color: var(--red-ink); border-color: color-mix(in oklch, var(--red) calc(26% * var(--tint-ring)), transparent); background: var(--red-tint); }
+.chip.flag { color: var(--violet-ink); border-color: color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent); background: var(--violet-tint); }
 /* 电脑动作卡缩略上的目标圈（components D8，control#action；ui-redesign gap D8 2026-10-17）：原型形制——22px 圆、
    2px --red 实环 + 6px --red 25% 晕。位置由 computerTargetRing.ringPoint 换算，不可证即不渲染此元素。 */
 .computer-target-ring { box-shadow: 0 0 0 2px var(--red), 0 0 0 6px color-mix(in oklch, var(--red) 25%, transparent); }
@@ -384,7 +416,7 @@ body {
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) calc(24% * var(--tint-ring)), transparent);
 }
 .atom-token[data-kind='path'] {
-  color: var(--violet);
+  color: var(--violet-ink);
   background: var(--violet-tint);
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent);
 }
@@ -395,9 +427,9 @@ button.btn {
   padding: 3px 10px; cursor: pointer;
 }
 button.btn:hover { background: var(--hover); color: var(--ink); }
-button.btn.primary { color: white; background: var(--accent); border-color: transparent; }
-button.btn.primary.danger { color: white; background: var(--red); }
-button.btn.danger { color: var(--red); }
+button.btn.primary { color: white; background: var(--accent-strong); border-color: transparent; }
+button.btn.primary.danger { color: white; background: var(--red-strong); }
+button.btn.danger { color: var(--red-ink); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
 
 /* 文本输入原语：.input 此前是死 class（无规则，搜索框裸奔）——settings-density 01 补上 token 化样式。
@@ -678,8 +710,8 @@ input, textarea { font: inherit; color: var(--ink); }
   white-space: pre-wrap; word-break: break-all;
 }
 .exec-stat { font-family: var(--mono); font-size: 10px; font-weight: 560; }
-.exec-stat.ins { color: var(--green); }
-.exec-stat.del { color: var(--red); }
+.exec-stat.ins { color: var(--green-ink); }
+.exec-stat.del { color: var(--red-ink); }
 
 .plan-row { padding: 6px 14px; }
 .thinking-full p { margin: 0 0 .6em; }

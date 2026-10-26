@@ -127,6 +127,66 @@ describe('向导角色步：列表 | 详情（ADR 0091）', () => {
     expect(create.mock.calls[0][0].roleOverrides).toEqual([expect.objectContaining({ name: '后端', duty: '改过的职责' })])
   })
 
+  // owner-followups-1015 票 17：向导角色详情换头像——图只在向导内存（不进 localStorage 草稿），
+  // 勾选角色的图随建项目单 roleAvatars 下发；未勾的角色不带；「恢复默认」后不带。
+  it('角色头像：换图随建项目下发、不进草稿存档；恢复默认后不带', async () => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({ ...draft, roles: ['后端'] }))
+    const IMG = 'data:image/png;base64,iVBORw0KGgo='
+    vi.stubGlobal('FileReader', class {
+      onload: (() => Promise<void>) | null = null
+      result = IMG
+      readAsDataURL() { void Promise.resolve().then(() => this.onload?.()) }
+    })
+    const el = await renderWizard()
+    await onRoles(el)
+    const pick = async (name: string) => {
+      await click(row(el, name))
+      const input = detail(el)!.querySelector<HTMLInputElement>('input[type="file"]')!
+      Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.png', { type: 'image/png' })], configurable: true })
+      await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+      await settle()
+    }
+    await pick('项目经理') // 未勾选：不随单
+    await pick('后端')
+    expect(detail(el)!.querySelector('[data-avatar-restore]')).toBeTruthy()
+    expect(localStorage.getItem('hexagon.wizard')).not.toContain('iVBORw0KGgo')
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    vi.spyOn(api, 'draftFlow').mockResolvedValue({
+      name: 'f', version: 1, knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{ name: 's', roles: ['后端'], due: [], checks: [], quality_checks: {}, reviews: [], stamp_point: false, backfill_edges: [], consult_wake: [] }],
+    })
+    await advance(el, 'confirm')
+    await clickIn(el, 'Create project')
+    expect(create.mock.calls[0][0].roleAvatars).toEqual([{ role: '后端', data_url: IMG }])
+    vi.unstubAllGlobals()
+  })
+
+  it('角色头像「恢复默认」后建项目不带图', async () => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({ ...draft, roles: ['后端'] }))
+    vi.stubGlobal('FileReader', class {
+      onload: (() => Promise<void>) | null = null
+      result = 'data:image/png;base64,iVBORw0KGgo='
+      readAsDataURL() { void Promise.resolve().then(() => this.onload?.()) }
+    })
+    const el = await renderWizard()
+    await onRoles(el)
+    const input = detail(el)!.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.png', { type: 'image/png' })], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    await settle()
+    await click(detail(el)!.querySelector('[data-avatar-restore]'))
+    expect(detail(el)!.querySelector('[data-avatar-restore]')).toBeNull()
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    vi.spyOn(api, 'draftFlow').mockResolvedValue({
+      name: 'f', version: 1, knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{ name: 's', roles: ['后端'], due: [], checks: [], quality_checks: {}, reviews: [], stamp_point: false, backfill_edges: [], consult_wake: [] }],
+    })
+    await advance(el, 'confirm')
+    await clickIn(el, 'Create project')
+    expect(create.mock.calls[0][0].roleAvatars).toEqual([])
+    vi.unstubAllGlobals()
+  })
+
   it('恢复模板：还原成模板原样、清掉已定制与人手标记，之后 AI 可再起草它', async () => {
     // 票 10 改写（ADR 0091）：旧断言是「还原模板再保存」两步；现在「恢复模板」一步生效。
     localStorage.setItem('hexagon.wizard', JSON.stringify({

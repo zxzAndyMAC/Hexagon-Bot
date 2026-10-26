@@ -99,6 +99,9 @@ pub struct ToolContext {
     pub subagent: Option<crate::subagent::Scope>,
     /// web 搜索摘要槽（票 03）：None = 未配置（工具回报「槽未配置」）。
     pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
+    /// 出图通道（owner-followups-1015 票 20）：Workbench 注入（封装钥匙仓，工具拿不到钥匙）；
+    /// None = 本 ctx 不能出图（临时构造的 ctx、子代理）。
+    pub images: Option<crate::image_gen::ImageAccess>,
     /// 语义索引嵌入器（票 02）：None = 默认本地哈希嵌入器。
     /// 测试注入替身——嵌入向量本身是实现细节，替身只要确定性。
     pub embedder: Option<Arc<dyn crate::semsearch::Embedder>>,
@@ -159,6 +162,7 @@ impl Default for ToolContext {
             tasks: Default::default(),
             subagent: None,
             websearch: None,
+            images: None,
             embedder: None,
             subagent_provider: None,
             reads: Default::default(),
@@ -359,6 +363,11 @@ impl Registry {
         r.register(crate::design::ReadDesignDirection);
         r.register(crate::design::ProposeDesign);
         r.register(ProposeExperience);
+        // owner-followups-1015 票 19：调度方召唤画师（exec 内限项目经理）。
+        r.register(crate::artist::SummonArtist);
+        // owner-followups-1015 票 16：聊天里拟登记发布目标 / 发起发布——只产卡，负责人批准才生效。
+        r.register(crate::release_chat::ProposeReleaseTarget);
+        r.register(crate::release_chat::RequestRelease);
         r.register(WebFetch);
         r.register(deps::DependencyFetch);
         r.register(verify_browser::BrowserVerify);
@@ -604,7 +613,9 @@ impl Registry {
                             "raw_input": input, "reason": reason, "safety_net": safety_net, "action_id":action.id,
                             "write_targets": tool.write_targets(&input)?,
                             "provenance": prov, "known_world": world,
-                            "remote_delta": delta, "screenshot": screenshot, "app": app }),
+                            "remote_delta": delta, "screenshot": screenshot, "app": app,
+                            // owner-followups-1015 #13：推送卡形的展示事实（判定不读它）
+                            "push": crate::push_class::card_facts(name, &input, Some(&ctx.repo_root)) }),
                         idem_key.as_deref(),
                     )?;
                     crate::actions::set_question(db, ctx, &action.id, &qid)?;

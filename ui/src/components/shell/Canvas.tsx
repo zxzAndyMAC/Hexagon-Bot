@@ -5,12 +5,11 @@
 //
 // 关着的画布不卸载（hidden）：未保存的文件草稿要留到离开确认能看见（Benchmark I1 同理），
 // 所以 App 只要有页签就渲染本组件，用 open 控制显隐。
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type WorkTab } from '../../store'
-import { isMac } from '../../keymap'
 import { parseUnifiedDiff } from '../../diff'
-import { Icon, type IconName } from '../Icon'
+import { Icon } from '../Icon'
 import { FileTypeIcon } from '../FileTypeIcon'
 import { ArtifactTab } from '../ArtifactTab'
 import { AgentTab } from '../AgentTab'
@@ -18,118 +17,17 @@ import { DiffView } from '../DiffView'
 import { FileEditor } from '../FileEditor'
 import { FileTree } from '../FileTree'
 import { ArtifactList } from './ArtifactList'
-// 票 09（协调裁决：票 03 偏差 4）：全宽时头部随对话收起，电脑控制状态与托管胶囊挪到页签栏右侧，
-// Agent 操控电脑、托管开着时负责人在任何主区视图都看得见。Header 在全宽时不渲染这两件，免得双挂
-// （ManagedPill 注册全局暂停 / 关闭键，挂两份会一键执行两次）。
-import { ComputerControlStatus } from '../ComputerControlStatus'
-import { ManagedPill } from '../ManagedPill'
+import { FileContextMenu } from '../FileMenu'
+import { useProjectFileTarget } from '../../fileMenuTarget'
+import type { ArtifactRow } from '../../gen/ArtifactRow'
+// 页签栏（含票 09 全宽状态槽、#06 溢出）在 CanvasTabs.tsx。
+import { CanvasTabs, type CanvasMode } from './CanvasTabs'
 import { TREE, readTreeWidth, writeTreeWidth } from '../../layout'
 import { ResizeHandle } from '@/components/ui/resize-handle'
-import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
-import { Dot } from '@/components/ui/dot'
 import { cn } from '@/lib/utils'
 
-export type CanvasMode = 'side' | 'full' | 'sheet'
-
-const KIND_ICON: Record<WorkTab['kind'], IconName> = {
-  artifact: 'file-text', diff: 'diff', agent: 'agent', file: 'file', artifacts: 'layers', files: 'folder',
-}
-
-function TabIcon({ tab }: { tab: WorkTab }) {
-  if (tab.kind === 'file') return <FileTypeIcon name={(tab.path ?? tab.title).split('/').pop() ?? tab.title} kind="file" size={14} />
-  return <Icon name={KIND_ICON[tab.kind]} size={14} />
-}
-
-function useTabTitle() {
-  const { t } = useTranslation()
-  return (tab: WorkTab) =>
-    tab.kind === 'artifacts' ? t('sidebar.artifacts')
-    : tab.kind === 'files' ? t('sidebar.files')
-    : tab.kind === 'agent' ? (tab.role ?? tab.title)
-    : tab.kind === 'artifact' || tab.kind === 'file' ? (tab.path ?? tab.title).split('/').pop() ?? tab.title
-    : tab.title
-}
-
-const tabClass = (on: boolean) => cn(
-  'hx-press hx-focus inline-flex h-[30px] min-w-0 max-w-[200px] flex-none cursor-pointer items-center gap-1.5 rounded-[var(--r-sm)] pr-1 pl-2.5 text-[12.5px] whitespace-nowrap',
-  on ? 'bg-hover-2 font-medium text-ink' : 'text-ink-2 hover:bg-hover',
-)
-
-/** ←→ 在页签间移动焦点（A22 聚焦行）。 */
-function arrowTabs(e: KeyboardEvent<HTMLDivElement>) {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-  const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')]
-  const i = tabs.indexOf(document.activeElement as HTMLElement)
-  if (i < 0) return
-  e.preventDefault()
-  const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
-  next.focus()
-  next.click()
-}
-
-function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolean }) {
-  const { t } = useTranslation()
-  const tabs = useUiStore((s) => s.tabs)
-  const active = useUiStore((s) => s.activeTab)
-  const fileEdits = useUiStore((s) => s.fileEdits)
-  const title = useTabTitle()
-  const st = useUiStore.getState
-  const dirty = (tab: WorkTab) => tab.kind === 'file' && Object.values(fileEdits).some((e) => e.dirty && e.path === tab.path)
-  return (
-    <div
-      data-canvas-tabs
-      className={cn('flex h-12 flex-none items-center gap-1 border-b border-line-soft pr-2 pl-2.5', isMac && narrowLead && 'pl-7')}
-    >
-      {mode === 'full' && (
-        <button type="button" data-canvas-conversation className={tabClass(false)} onClick={() => st().showConversation()}>
-          <Icon name="message" size={14} />{t('canvas.conversation')}
-        </button>
-      )}
-      <div role="tablist" aria-label={t('canvas.tabs')} onKeyDown={arrowTabs} className="flex min-w-0 items-center gap-1 overflow-hidden">
-        {tabs.map((tab) => {
-          const on = tab.id === active
-          const name = title(tab)
-          return (
-            <div key={tab.id} className={tabClass(on)} data-canvas-tab={tab.id}
-              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); st().closeTab(tab.id) } }}>
-              <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} title={tab.path ?? name}
-                className="flex min-w-0 cursor-pointer items-center gap-1.5 outline-none"
-                onClick={() => st().setActiveTab(tab.id)}>
-                <TabIcon tab={tab} />
-                <span className="truncate">{name}</span>
-                {dirty(tab) && <Dot tone="warn" data-unsaved />}
-              </button>
-              <IconButton size="sm" label={t('canvas.closeTab', { name })} action="closeTab" className="opacity-50 hover:opacity-100"
-                onClick={(e) => { e.stopPropagation(); st().closeTab(tab.id) }}>
-                <Icon name="close" size={12} />
-              </IconButton>
-            </div>
-          )
-        })}
-      </div>
-      <span data-tauri-drag-region className="flex-1 self-stretch" />
-      {mode === 'full' && (
-        <div data-canvas-status className="flex flex-none items-center gap-1.5 pr-1">
-          <ComputerControlStatus />
-          <ManagedPill />
-        </div>
-      )}
-      {mode === 'full' ? (
-        <IconButton size="sm" label={t('canvas.sideBySide')} action="canvasFullWidth" data-canvas-side-by-side onClick={() => st().toggleCanvasFull()}>
-          <Icon name="columns" size={14} />
-        </IconButton>
-      ) : (
-        <IconButton size="sm" label={t('canvas.expand')} action="canvasFullWidth" data-canvas-expand onClick={() => st().toggleCanvasFull()}>
-          <Icon name="expand" size={14} />
-        </IconButton>
-      )}
-      <IconButton size="sm" label={t('canvas.close')} action="toggleCanvas" data-canvas-close onClick={() => st().setCanvasOpen(false)}>
-        <Icon name="close" size={14} />
-      </IconButton>
-    </div>
-  )
-}
+export type { CanvasMode }
 
 function TabBody({ tab }: { tab: WorkTab }) {
   const { t } = useTranslation()
@@ -180,6 +78,21 @@ function TreePane() {
   )
 }
 
+/** 空态最近产物一行；右键 = 共用文件菜单（A16b，#32，2026-10-21 负责人裁决；待恢复的只给「打开」，同产物清单）。 */
+function RecentArtifact({ a }: { a: ArtifactRow }) {
+  const open = () => useUiStore.getState().openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open, artifact: true })
+  return (
+    <FileContextMenu {...target}>
+      <button type="button" data-canvas-recent className="hx-focus flex h-8 w-full cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
+        onClick={open}>
+        <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={14} />
+        <span className="truncate font-mono text-[12.5px]">{a.path}</span>
+      </button>
+    </FileContextMenu>
+  )
+}
+
 /** 空态（A19，interaction §6 补设计）：说明为什么空 + 一个动作（打开项目文件）+ 最近产物。 */
 function CanvasEmpty() {
   const { t } = useTranslation()
@@ -199,13 +112,7 @@ function CanvasEmpty() {
       {recent.length > 0 && (
         <div className="mt-6 w-full max-w-[320px] text-left">
           <div className="mb-1 px-2 text-[12px] text-ink-3">{t('canvas.recent')}</div>
-          {recent.map((a) => (
-            <button key={a.id} type="button" className="hx-focus flex h-8 w-full cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
-              onClick={() => st().openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })}>
-              <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={14} />
-              <span className="truncate font-mono text-[12.5px]">{a.path}</span>
-            </button>
-          ))}
+          {recent.map((a) => <RecentArtifact key={a.id} a={a} />)}
         </div>
       )}
     </div>

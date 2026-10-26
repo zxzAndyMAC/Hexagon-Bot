@@ -42,7 +42,7 @@ export function UsageStats({ series, prevSeries, rows }: { series: UsageBucket[]
       <StatCard data-stat="budget" k={t('usage.budget')}
         action={!editing && <Button size="xs" variant="ghost" onClick={() => setEditing(true)}>{t('usage.setLimit')}</Button>}
         v={<>
-          <span className={capped ? 'text-red' : undefined}>{total ? fmtYuan(spent) : '—'}</span>
+          <span className={capped ? 'text-red-ink' : undefined}>{total ? fmtYuan(spent) : '—'}</span>
           {limitMc != null && <span className="text-[13px] font-medium text-ink-3"> / {fmtYuan(limitMc)}</span>}
         </>}
       >

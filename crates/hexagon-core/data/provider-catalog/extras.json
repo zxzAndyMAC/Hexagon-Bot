@@ -1,0 +1,424 @@
+{
+  "_comment": "Derived from AI-Cleaner prototype src/provider-catalog.json (Cherry Studio 9d1bf05 registry: icon key mapping per packages/ui registry.ts, up to three registered sample models from the registry model list). Illustration only, never prefilled.",
+  "providers": {
+    "cherryin": {
+      "iconKey": "cherryin",
+      "sampleModels": [
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3.5-122b-a10b",
+        "qwen/qwen3.5-27b"
+      ]
+    },
+    "silicon": {
+      "iconKey": "silicon",
+      "sampleModels": [
+        "deepseek-ai/DeepSeek-R1",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-V3.1"
+      ]
+    },
+    "aihubmix": {
+      "iconKey": "aihubmix",
+      "sampleModels": [
+        "doubao-seedream-4-0",
+        "doubao-seedream-4-5",
+        "ernie-irag-edit"
+      ]
+    },
+    "ovms": {
+      "iconKey": "intel",
+      "sampleModels": []
+    },
+    "ocoolai": {
+      "iconKey": "ocoolai",
+      "sampleModels": []
+    },
+    "zhipu": {
+      "iconKey": "zhipu",
+      "sampleModels": [
+        "cogview-4",
+        "glm-5.2",
+        "glm-5.2-fast"
+      ]
+    },
+    "deepseek": {
+      "iconKey": "deepseek",
+      "sampleModels": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ]
+    },
+    "alayanew": {
+      "iconKey": "alayanew",
+      "sampleModels": []
+    },
+    "dmxapi": {
+      "iconKey": "dmxapi",
+      "sampleModels": [
+        "dall-e-3",
+        "doubao-seedream-4-0",
+        "doubao-seedream-4-5"
+      ]
+    },
+    "aionly": {
+      "iconKey": "ai-only",
+      "sampleModels": []
+    },
+    "burncloud": {
+      "iconKey": "burncloud",
+      "sampleModels": []
+    },
+    "302ai": {
+      "iconKey": "302ai",
+      "sampleModels": [
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-haiku-4-5-20251001"
+      ]
+    },
+    "lanyun": {
+      "iconKey": "lanyun",
+      "sampleModels": [
+        "deepseek-r1",
+        "deepseek-v3.1",
+        "/maas/deepseek-ai/DeepSeek-V3.2"
+      ]
+    },
+    "ph8": {
+      "iconKey": "ph8",
+      "sampleModels": []
+    },
+    "sophnet": {
+      "iconKey": "sophnet",
+      "sampleModels": [
+        "DeepSeek-R1-0528",
+        "DeepSeek-v3"
+      ]
+    },
+    "ppio": {
+      "iconKey": "ppio",
+      "sampleModels": [
+        "zai-org/autoglm-phone-9b-multilingual",
+        "baai/bge-m3",
+        "deepseek/deepseek-r1-0528"
+      ]
+    },
+    "qiniu": {
+      "iconKey": "qiniu",
+      "sampleModels": [
+        "mimo-v2-flash"
+      ]
+    },
+    "openrouter": {
+      "iconKey": "openrouter",
+      "sampleModels": [
+        "aion-labs/aion-2.0",
+        "aion-labs/aion-3.0",
+        "aion-labs/aion-3.0-mini"
+      ]
+    },
+    "ollama": {
+      "iconKey": "ollama",
+      "sampleModels": [
+        "x/flux2-klein",
+        "x/z-image-turbo"
+      ]
+    },
+    "radeon-cloud": {
+      "iconKey": "radeon-cloud",
+      "sampleModels": [
+        "DeepSeek-V4-Flash",
+        "DeepSeek-V4-Pro",
+        "GLM-5.1"
+      ]
+    },
+    "tokendance": {
+      "iconKey": "tokendance",
+      "sampleModels": []
+    },
+    "new-api": {
+      "iconKey": "newapi",
+      "sampleModels": []
+    },
+    "lmstudio": {
+      "iconKey": "lmstudio",
+      "sampleModels": []
+    },
+    "litellm": {
+      "iconKey": "litellm",
+      "sampleModels": []
+    },
+    "anthropic": {
+      "iconKey": "anthropic",
+      "sampleModels": []
+    },
+    "claude-code": {
+      "iconKey": "claude-code",
+      "sampleModels": [
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-haiku-4-5"
+      ]
+    },
+    "openai-codex": {
+      "iconKey": "openai",
+      "sampleModels": [
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini"
+      ]
+    },
+    "grok-cli": {
+      "iconKey": "grok",
+      "sampleModels": [
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-multi-agent-0309"
+      ]
+    },
+    "omlx": {
+      "iconKey": "omlx",
+      "sampleModels": []
+    },
+    "openai": {
+      "iconKey": "openai",
+      "sampleModels": []
+    },
+    "opencode": {
+      "iconKey": "opencode",
+      "sampleModels": [
+        "deepseek-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-flash"
+      ]
+    },
+    "azure-openai": {
+      "iconKey": "azureai",
+      "sampleModels": []
+    },
+    "gemini": {
+      "iconKey": "google",
+      "sampleModels": []
+    },
+    "vertexai": {
+      "iconKey": "vertexai",
+      "sampleModels": [
+        "claude-fable-5@default",
+        "claude-fable-5-1@default",
+        "claude-haiku-4-5@20251001"
+      ]
+    },
+    "copilot": {
+      "iconKey": "github-copilot",
+      "sampleModels": [
+        "claude-fable-5",
+        "claude-fable-5.1",
+        "claude-haiku-4.5"
+      ]
+    },
+    "moonshot": {
+      "iconKey": "moonshot",
+      "sampleModels": [
+        "kimi-k2.5",
+        "kimi-k2.6",
+        "kimi-k2.7-code"
+      ]
+    },
+    "moonshot-global": {
+      "iconKey": "moonshot",
+      "sampleModels": [
+        "kimi-k2.5",
+        "kimi-k2.6",
+        "kimi-k2.7-code"
+      ]
+    },
+    "baichuan": {
+      "iconKey": "baichuan",
+      "sampleModels": []
+    },
+    "dashscope": {
+      "iconKey": "bailian",
+      "sampleModels": [
+        "deepseek-r1",
+        "deepseek-v3",
+        "deepseek-v3.1"
+      ]
+    },
+    "stepfun": {
+      "iconKey": "step",
+      "sampleModels": []
+    },
+    "doubao": {
+      "iconKey": "volcengine",
+      "sampleModels": [
+        "deepseek-r1",
+        "deepseek-r1-distill-qwen-14b",
+        "deepseek-v3"
+      ]
+    },
+    "minimax": {
+      "iconKey": "minimax",
+      "sampleModels": [
+        "image-01",
+        "image-01-live",
+        "minimax-m3"
+      ]
+    },
+    "groq": {
+      "iconKey": "groq",
+      "sampleModels": [
+        "allam-2-7b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b"
+      ]
+    },
+    "together": {
+      "iconKey": "together",
+      "sampleModels": [
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "zai-org/GLM-5",
+        "openai/gpt-oss-120b"
+      ]
+    },
+    "fireworks": {
+      "iconKey": "fireworks",
+      "sampleModels": [
+        "accounts/fireworks/models/deepseek-v4-flash-0731",
+        "accounts/fireworks/models/deepseek-v4-flash-vision-exp",
+        "accounts/fireworks/models/deepseek-v4-pro-0813"
+      ]
+    },
+    "nvidia": {
+      "iconKey": "nvidia",
+      "sampleModels": [
+        "nvidia/active-speaker-detection",
+        "nvidia/bevformer",
+        "baai/bge-m3"
+      ]
+    },
+    "grok": {
+      "iconKey": "grok",
+      "sampleModels": []
+    },
+    "mistral": {
+      "iconKey": "mistral",
+      "sampleModels": []
+    },
+    "jina": {
+      "iconKey": "jina",
+      "sampleModels": [
+        "jina-code-embeddings-0.5b",
+        "jina-code-embeddings-1.5b"
+      ]
+    },
+    "perplexity": {
+      "iconKey": "perplexity",
+      "sampleModels": []
+    },
+    "modelscope": {
+      "iconKey": "modelscope",
+      "sampleModels": [
+        "ZhipuAI/GLM-4.5",
+        "ZhipuAI/GLM-4.6",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507"
+      ]
+    },
+    "xirang": {
+      "iconKey": "xirang",
+      "sampleModels": []
+    },
+    "tokenhub": {
+      "iconKey": "tencent-cloud-ti",
+      "sampleModels": [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-202605",
+        "deepseek-v4-pro"
+      ]
+    },
+    "baidu-cloud": {
+      "iconKey": "baidu-cloud",
+      "sampleModels": []
+    },
+    "gpustack": {
+      "iconKey": "gpustack",
+      "sampleModels": []
+    },
+    "voyageai": {
+      "iconKey": "voyage",
+      "sampleModels": [
+        "rerank-1",
+        "rerank-2",
+        "rerank-2-5"
+      ]
+    },
+    "aws-bedrock": {
+      "iconKey": "aws-bedrock",
+      "sampleModels": [
+        "global.anthropic.claude-fable-5",
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-opus-4-1-20250805-v1:0"
+      ]
+    },
+    "poe": {
+      "iconKey": "poe",
+      "sampleModels": [
+        "claude-haiku-4.5",
+        "claude-opus-4.5",
+        "Claude-Opus-4.6"
+      ]
+    },
+    "longcat": {
+      "iconKey": "longcat",
+      "sampleModels": [
+        "LongCat-2.0"
+      ]
+    },
+    "huggingface": {
+      "iconKey": "huggingface",
+      "sampleModels": [
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-V3.1"
+      ]
+    },
+    "gateway": {
+      "iconKey": "vercel",
+      "sampleModels": [
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-fable-5",
+        "anthropic/claude-fable-5.1"
+      ]
+    },
+    "cerebras": {
+      "iconKey": "cerebras",
+      "sampleModels": [
+        "gpt-oss-120b",
+        "qwen-3.8-27b"
+      ]
+    },
+    "comfyui": {
+      "iconKey": "comfyui",
+      "sampleModels": []
+    },
+    "mimo": {
+      "iconKey": "mimo",
+      "sampleModels": [
+        "mimo-v2-5",
+        "mimo-v2-5-pro",
+        "mimo-v2-5-pro-ultraspeed"
+      ]
+    },
+    "zai": {
+      "iconKey": "z-ai",
+      "sampleModels": []
+    },
+    "minimax-global": {
+      "iconKey": "minimax",
+      "sampleModels": [
+        "image-01",
+        "image-01-live",
+        "minimax-m3"
+      ]
+    }
+  }
+}

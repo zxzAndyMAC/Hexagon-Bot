@@ -10,6 +10,7 @@ import { Field, Input } from '@/components/ui/input'
 import { IconButton } from '@/components/ui/icon-button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Icon } from '../Icon'
+import { providerKeyReady } from '../../providerGate'
 import type { Draft } from './draft'
 
 export function DirStep({ draft, set, report, busy, err, onBrowse, onOpenExisting }: {
@@ -49,7 +50,7 @@ export function DirStep({ draft, set, report, busy, err, onBrowse, onOpenExistin
           <Button size="sm" variant="ink" loading={busy} onClick={onOpenExisting}>{t('wizard.openProject')}</Button>
         </div>
       )}
-      {err && <div role="alert" className="text-[12.5px] text-red">{err}</div>}
+      {err && <div role="alert" className="text-[12.5px] text-red-ink">{err}</div>}
       {report && !report.is_git && !report.has_workbench && (
         <label className="flex items-center gap-2 text-[13px]">
           <Checkbox data-init-git checked={draft.initGit} onCheckedChange={(v) => set({ initGit: v === true })} />
@@ -77,13 +78,13 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
   }
   const unready = slots.filter((s) => {
     const r = bindingOf(s)
-    return !(r && r.provider.enabled && r.provider.key_set)
+    return !(r && r.provider.enabled && providerKeyReady(r.provider))
   })
   return (
     <div className="flex flex-col gap-2">
       {slots.map((slot) => {
         const r = bindingOf(slot)
-        const ready = !!(r && r.provider.enabled && r.provider.key_set)
+        const ready = !!(r && r.provider.enabled && providerKeyReady(r.provider))
         const viaDefault = !doc.slots[slot] && !!doc.slots.default
         return (
           <div key={slot} data-key-slot={slot} className="flex flex-col gap-2 rounded-[var(--r-card)] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
@@ -99,7 +100,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
               {ready && <Badge variant="ok"><Icon name="check" size={14} />{t('wizard.keyOk')}</Badge>}
               {r && !r.provider.enabled && <Badge variant="warn">{t('providers.disabledTag')}</Badge>}
             </div>
-            {r && r.provider.enabled && !r.provider.key_set && <KeyRow provider={r.provider} busy={busy} onSave={onSaveKey} />}
+            {r && r.provider.enabled && !providerKeyReady(r.provider) && <KeyRow provider={r.provider} busy={busy} onSave={onSaveKey} />}
             {!r && <div className="text-[12px] text-ink-3">{t('wizard.noProvider', { slot })}</div>}
           </div>
         )
@@ -107,7 +108,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
       {unready.length > 0 && (
         <div className="mt-1 flex items-center gap-2.5">
           <Button size="sm" onClick={() => api.openSettings().catch(() => {})}><Icon name="settings" size={14} />{t('wizard.goSettings')}</Button>
-          <span className="text-[12.5px] text-orange">{t('wizard.keysBlocked')}</span>
+          <span className="text-[12.5px] text-orange-ink">{t('wizard.keysBlocked')}</span>
         </div>
       )}
     </div>
@@ -209,7 +210,7 @@ export function ConfirmSummary({ draft, set, pickedRoles, approvedQuality, repor
         </div>
       )}
       {existingRepoAlign && (
-        <div className="mt-3 rounded-[var(--r-card)] bg-violet-tint px-3 py-2.5 text-[12.5px] text-violet">{t('wizard.alignHint')}</div>
+        <div className="mt-3 rounded-[var(--r-card)] bg-violet-tint px-3 py-2.5 text-[12.5px] text-violet-ink">{t('wizard.alignHint')}</div>
       )}
     </div>
   )

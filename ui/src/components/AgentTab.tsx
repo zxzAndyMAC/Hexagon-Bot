@@ -22,6 +22,7 @@ import { useTimelineWindow } from '../useTimelineWindow'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { ExecBody, CallStatus } from './ExecCard'
 import { Avatar } from '@/components/ui/avatar'
+import { RestoreAvatarButton, useAvatarFile } from './AvatarPicker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -29,6 +30,8 @@ import { Progress } from '@/components/ui/progress'
 import { Spinner } from '@/components/ui/spinner'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { FileContextMenu } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
 
 type Step = {
   id: number
@@ -52,8 +55,9 @@ const STEP_ICON: Record<string, IconName> = {
   review_rejected: 'warn', review_skipped: 'arrow-right', flag_submitted: 'flag', flag_adjudicated: 'flag',
   permission_asked: 'help', permission_allowed: 'check', permission_denied: 'close', permission_shape_remembered: 'check',
   escalated: 'escalate', test_ran: 'check', proposal_queued: 'diff', proposal_reviewed: 'diff', proposal_stamped: 'stamp',
-  proposal_rejected: 'diff', proposal_activated: 'bolt', proposal_rolled_back: 'arrow-left', publish_requested: 'publish',
-  publish_confirmed: 'publish', publish_rejected: 'publish', publish_failed: 'publish', backfill_executed: 'refresh',
+  proposal_rejected: 'diff', proposal_activated: 'bolt', proposal_rolled_back: 'arrow-left', push_requested: 'publish',
+  push_confirmed: 'publish', push_rejected: 'publish', push_failed: 'publish', backfill_executed: 'refresh',
+  release_requested: 'publish', release_confirmed: 'publish', release_rejected: 'publish', release_failed: 'publish',
   usage_cap_hit: 'yen', owner_command: 'send', fastpath_dispatched: 'bolt', system: 'list',
 }
 
@@ -71,7 +75,12 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const image: ImageGenerationSlot = providers?.image_generation ?? { state: 'unconfigured' }
   const avatarUrl = useUiStore((s) => s.avatars[agentId])
   const member = team.find((m) => m.id === agentId)
-  const fileRef = useRef<HTMLInputElement>(null)
+  // 票 17：画布 Agent 详情换的是实例覆盖；「恢复默认」删覆盖、露出角色头像。
+  const avatarFile = useAvatarFile(async (url) => {
+    const epoch = useUiStore.getState().projectEpoch
+    await api.setAgentAvatar(agentId, url)
+    if (useUiStore.getState().projectEpoch === epoch) await invalidate('team')
+  })
   const [page, setPage] = useState<Page>('activity')
   const [detail, setDetail] = useState<AgentDetail | null>(null)
   useEffect(() => {
@@ -97,38 +106,20 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const reviewerName = reviewer ? team.find((m) => m.id === reviewer || m.role === reviewer)?.role ?? reviewer : null
   const sub = [duty, reviewerName ? t('agentDetail.reviewer', { who: reviewerName }) : null].filter(Boolean).join(' · ')
 
-  const pickAvatar = (f: File) => {
-    // ui-audit 票 04（P1-6）：>2MB 本地拒绝不发请求（data URL 会膨胀 ~4/3）；上传失败走 toast。
-    if (f.size > 2 * 1024 * 1024) { pushToast(t('agent.avatarTooBig'), 'err'); return }
-    // Benchmark I1 / 2026-10-06 Spec: a delayed A FileReader previously
-    // fetched B's IPC identity and wrote B's same-named agent avatar.
-    const epoch = useUiStore.getState().projectEpoch
-    const r = new FileReader()
-    r.onload = async () => {
-      if (useUiStore.getState().projectEpoch !== epoch) return
-      try {
-        await api.setAgentAvatar(agentId, String(r.result))
-        if (useUiStore.getState().projectEpoch === epoch) await invalidate('team')
-      } catch (err) {
-        if (useUiStore.getState().projectEpoch === epoch) pushToast(errText(err), 'err')
-      }
-    }
-    r.readAsDataURL(f)
-  }
-
   return (
     <div data-agent-detail className="flex min-h-0 flex-1 flex-col">
       {/* 头卡 */}
       <div className="flex-none px-[18px] pt-[18px]">
         <div className="flex items-center gap-3.5">
           <Avatar agentId={agentId} name={member.role} size={40} src={avatarUrl}
-            onChangeImage={() => fileRef.current?.click()} changeImageLabel={t('agent.changeAvatar')} />
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) pickAvatar(f); e.target.value = '' }} />
+            onChangeImage={avatarFile.open} changeImageLabel={t('avatar.changeInstance')} />
+          {avatarFile.input}
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold text-ink">{member.role}</div>
             {sub && <div className="truncate text-[12.5px] text-ink-2" title={sub}>{sub}</div>}
           </div>
+          <RestoreAvatarButton shown={!!member.avatar_override}
+            onRestore={async () => { await api.clearAgentAvatar(agentId); await invalidate('team') }} />
           <Button size="sm" variant={sleeping ? 'primary' : 'default'} data-agent-sleep
             onClick={async () => {
               try { await api.setAgentSleeping(agentId, !sleeping); await invalidate('team') }
@@ -244,7 +235,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
       }}>
       {window.loading && <div className="flex items-center gap-2 py-2 text-[12.5px] text-ink-3"><Spinner size={12} />{t('timeline.loadingRecent')}</div>}
       {window.error && <Button size="xs" onClick={() => void window.retry()} title={[t('timeline.retry'), formatBinding(bindingFor('timelineRetry'))].filter(Boolean).join(' · ')}>{t('timeline.retry')}</Button>}
-      {window.olderError && <p role="status" className="text-[12.5px] text-red">{t('timeline.olderFailed')}</p>}
+      {window.olderError && <p role="status" className="text-[12.5px] text-red-ink">{t('timeline.olderFailed')}</p>}
       {window.olderLoading && <div className="flex items-center gap-2 py-2 text-[12.5px] text-ink-3"><Spinner size={12} />{t('timeline.loadingOlder')}</div>}
       {!window.olderLoading && window.page?.has_before && (
         <Button variant="ghost" size="xs" className="mb-2" onClick={loadOlder}
@@ -286,7 +277,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
                             {s.label}
                           </button>
                           {s.summary && (s.path
-                            ? <button type="button" className="hx-focus min-w-0 truncate font-mono text-[11.5px] text-accent-ink live:hover:underline" title={s.path} onClick={() => openPath(s.path!)}>{s.summary}</button>
+                            ? <StepPathLink path={s.path} artifact={s.kind === 'artifact_delivered'} label={s.summary} onOpen={() => openPath(s.path!)} />
                             : <span className="min-w-0 truncate font-mono text-[11.5px] text-ink-3" title={s.summary}>{s.summary}</span>)}
                           <span className="flex-1" />
                           {/* 票 05 TaskRows 状态机：tool_called 无 result=在途运行环；落定翻 check/X */}
@@ -394,5 +385,16 @@ function UsageFooter({ agentId }: { agentId: string }) {
         <span className="font-mono tabular-nums">{fmtYuan(spend.mc, i18n.language)} · {fmtK(spend.tokens)} tokens</span>
       </div>
     </div>
+  )
+}
+
+/** 步骤行路径链接；右键 = 共用文件菜单（A16b，owner-followups-1015 #32，2026-10-21 负责人裁决）。根外的绝对路径只留「打开」。 */
+function StepPathLink({ path, artifact, label, onOpen }: { path: string; artifact: boolean; label: string; onOpen: () => void }) {
+  // 交付步骤的 path 是产物登记路径（`.hexagon/` 内相对），工具步骤的是仓内路径
+  const target = useProjectFileTarget(path, { onOpen, artifact })
+  return (
+    <FileContextMenu {...target}>
+      <button type="button" data-step-path className="hx-focus min-w-0 truncate font-mono text-[11.5px] text-accent-ink live:hover:underline" title={path} onClick={onOpen}>{label}</button>
+    </FileContextMenu>
   )
 }

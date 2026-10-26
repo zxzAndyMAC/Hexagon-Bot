@@ -9,16 +9,19 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
-import { providerStepReady, wizardPreset } from '../../providerGate'
+import { isLocalEndpoint, providerKeyReady, providerStepReady, wizardPreset } from '../../providerGate'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { Avatar } from '@/components/ui/avatar'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { iconKeyOf } from '../../providerIcons'
+import { ProviderIcon } from '../ProviderIcon'
 import { Icon } from '../Icon'
 import { fmtWindow, useKeyProbe, type ProbeState } from '../../keyProbe'
+import { useRequestUrl } from '../../requestUrl'
+import { RequestUrlNote } from '../RequestUrlNote'
 
 // 与 ProviderManager 同一套 slug，避免两个界面对同一名字写出不同 id。
 const providerSlug = (s: string) =>
@@ -34,7 +37,7 @@ function suggestedModel(doc: ProvidersView, p?: ProviderView): string {
 function initialProviderId(doc: ProvidersView): string {
   const bound = doc.slots.default?.provider_id
   if (bound && doc.providers.some((p) => p.id === bound)) return bound
-  return doc.providers.find((p) => p.enabled && p.key_set)?.id ?? doc.providers[0]?.id ?? ''
+  return doc.providers.find((p) => p.enabled && providerKeyReady(p))?.id ?? doc.providers[0]?.id ?? ''
 }
 
 function KeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -114,7 +117,7 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
   return (
     // 字段铺满内容区（entry#wz-provider 的服务商 / API Key / 默认模型与说明同宽）；票 16B 前限宽 560，右侧留一截空。
     <div className="flex flex-col gap-3">
-      <div className="text-[12.5px] text-orange">{t('wizard.providersBlocked')}</div>
+      <div className="text-[12.5px] text-orange-ink">{t('wizard.providersBlocked')}</div>
       <ProviderForm doc={doc} onRefresh={onRefresh} />
       <Button size="sm" variant="ghost" className="self-start" onClick={() => api.openSettings().catch(() => {})}>
         <Icon name="settings" size={14} />{t('wizard.goSettings')}
@@ -155,18 +158,21 @@ function resolveChoice(value: string, doc: ProvidersView, presets: ProviderPrese
   return null
 }
 
-/** 服务商下拉（gap B12 2026-10-15，entry#wz-provider「A Anthropic ▾」）：选项带 18 字母头像，
- *  原生 <option> 画不了头像，改走 A9 触发 + A16 弹层的 Select（键盘 / 读屏走 Radix Select）。
- *  头像确定色按供应商 id 哈希，与设置「模型服务」列表同一色号；「自定义…」用加号图标块。 */
-function ProviderSelect({ value, onChange, providers, presets }: {
+/** 服务商下拉（gap B12 2026-10-15，entry#wz-provider「A Anthropic ▾」）：选项带服务商图标（#23 起 A13b，原 18 字母头像），
+ *  原生 <option> 画不了图，改走 A9 触发 + A16 弹层的 Select（键盘 / 读屏走 Radix Select）。
+ *  图标与设置「模型服务」列表同一查找（providerIcons.ts）；「自定义…」用加号图标块。 */
+function ProviderSelect({ value, onChange, providers, presets, catalog }: {
   value: string
   onChange: (v: string) => void
   providers: ProviderView[]
   presets: ProviderPreset[]
+  /** 完整预设表：只用来给已配置供应商按 id 找图标键（`presets` 已排除同 id 的，查不到）。 */
+  catalog: ProviderPreset[]
 }) {
   const { t } = useTranslation()
   // gap B12 曾把弹层挂进向导层（当时向导 z-60 盖住 z-20 弹层）；gap C5（2026-10-15）把全屏视图降到 16，弹层照常挂 body。
-  const face = (id: string, name: string) => <Avatar agentId={id} name={name} size={18} />
+  // #23：品牌图标按 id 对上预设取 icon_key（已配置供应商同样按 id 找预设），无则中性图标
+  const face = (iconKey: string) => <ProviderIcon iconKey={iconKey} size={20} />
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger aria-label={t('wizard.providerField.label')} data-provider-select="">
@@ -176,18 +182,18 @@ function ProviderSelect({ value, onChange, providers, presets }: {
         {providers.length > 0 && (
           <SelectGroup>
             <SelectLabel>{t('wizard.providerField.configured')}</SelectLabel>
-            {providers.map((p) => <SelectItem key={p.id} value={`p:${p.id}`} icon={face(p.id, p.name)}>{p.name}</SelectItem>)}
+            {providers.map((p) => <SelectItem key={p.id} value={`p:${p.id}`} icon={face(iconKeyOf(catalog, p.id))}>{p.name}</SelectItem>)}
           </SelectGroup>
         )}
         {presets.length > 0 && (
           <SelectGroup>
             <SelectLabel>{t('wizard.providerField.presets')}</SelectLabel>
-            {presets.map((x) => <SelectItem key={x.id} value={`preset:${x.id}`} icon={face(x.id, x.name)}>{x.name}</SelectItem>)}
+            {presets.map((x) => <SelectItem key={x.id} value={`preset:${x.id}`} icon={face(x.icon_key)}>{x.name}</SelectItem>)}
           </SelectGroup>
         )}
         <SelectSeparator />
         <SelectItem value="custom" icon={
-          <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-ink-2"><Icon name="plus" size={12} /></span>
+          <span className="grid size-5 flex-none place-items-center rounded-[5px] bg-hover-2 text-ink-2"><Icon name="plus" size={12} /></span>
         }>{t('wizard.providerField.custom')}</SelectItem>
       </SelectContent>
     </Select>
@@ -211,6 +217,8 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   const [kind, setKind] = useState<ProviderView['kind']>('openai')
   const [baseUrl, setBaseUrl] = useState('')
   const [busy, setBusy] = useState(false)
+  // 票 21：自定义地址下方实时显示实际请求地址（core provider_url）。
+  const requestUrl = useRequestUrl(kind, choice.type === 'custom' ? baseUrl : '')
 
   // 预设异步到达后，第一次落到预设的默认模型（负责人还没动过模型框才填）。
   const shownModel = !modelTouched && choice.type === 'preset' ? choice.preset.default_model : model
@@ -222,11 +230,15 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
       : name.trim() && baseUrl.trim()
         ? { id: providerSlug(name), name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }
         : null
-  const needsKey = choice.type !== 'provider' || !choice.p.key_set
+  // 钥匙框：没存钥匙就显示。票 25：本机回环端点（自填 localhost 地址或已存的本机供应商）
+  // 钥匙可留空——不带鉴权头直连；填了照常带头。
+  const askKey = choice.type !== 'provider' || !choice.p.key_set
+  const needsKey = choice.type === 'provider' ? !providerKeyReady(choice.p) : !(def && isLocalEndpoint(def.base_url))
+  const sentKey = askKey && secret.trim() ? secret.trim() : undefined
   const canApply = !!def && !!shownModel.trim() && (!needsKey || !!secret.trim())
   const probe = useKeyProbe(
     def && shownModel.trim() && (!needsKey || secret.trim()) ? def : null,
-    needsKey ? secret.trim() : undefined, shownModel)
+    sentKey, shownModel)
 
   function pick(next: string) {
     setPicked(next)
@@ -241,7 +253,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
     setBusy(true)
     try {
       // 钥匙已存就不要再送 secret——空 secret 后端会留下原钥匙，但这一步根本不该再问。
-      await api.saveProvider({ ...def, enabled: true }, needsKey ? secret.trim() : undefined)
+      await api.saveProvider({ ...def, enabled: true }, sentKey)
       await api.setSlotBinding('default', def.id, shownModel.trim())
       setSecret('')
       onRefresh()
@@ -256,7 +268,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   return (
     <>
       <Field label={t('wizard.providerField.label')}>
-        <ProviderSelect value={value} onChange={pick} providers={doc.providers} presets={freshPresets} />
+        <ProviderSelect value={value} onChange={pick} providers={doc.providers} presets={freshPresets} catalog={presets} />
       </Field>
       {choice.type === 'custom' && (
         <>
@@ -269,12 +281,12 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
               <option value="anthropic">anthropic</option>
             </NativeSelect>
           </Field>
-          <Field label={t('providers.baseUrl')}>
+          <Field label={t('providers.baseUrl')} help={requestUrl ? <RequestUrlNote url={requestUrl} /> : undefined}>
             <Input aria-label={t('providers.baseUrl')} placeholder={t('providers.baseUrl')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           </Field>
         </>
       )}
-      {needsKey && <KeyInput key={value} value={secret} onChange={setSecret} />}
+      {askKey && <KeyInput key={value} value={secret} onChange={setSecret} />}
       <ModelProbeField value={shownModel} onChange={(v) => { setModel(v); setModelTouched(true) }} probe={probe}
         list={catalog.length ? 'wizard-default-models' : undefined} />
       {catalog.length > 0 && (

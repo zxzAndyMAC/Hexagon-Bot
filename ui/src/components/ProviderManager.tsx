@@ -5,12 +5,17 @@
 // 数据语义：非密配置存 providers.json；key 使用 active CredentialStore（provider/<id>）。
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
-import { isLocalEndpoint } from '../providerGate'
+import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
+import { useRequestUrl } from '../requestUrl'
+import { RequestUrlNote } from './RequestUrlNote'
+import { isLocalEndpoint, providerKeyReady } from '../providerGate'
+import { enabledFirst, presetOf, searchText } from '../providerCatalog'
+import { iconKeyOf } from '../providerIcons'
+import { ProviderIcon } from './ProviderIcon'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
-import { Avatar } from '@/components/ui/avatar'
+import { takeSlotFocus } from '../settingsSlotFocus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -19,7 +24,7 @@ import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { DetailHead, Empty, ListDetail, SubHead } from './settings/kit'
+import { DetailHead, DisabledChip, Empty, ListDetail, SubHead } from './settings/kit'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。gap B13（2026-10-15）：原先是这里一份
 /// 14 条硬编码表，与向导读的 core provider_presets（5 条）各说各话；现在两边只读 core 那一份。
@@ -48,7 +53,7 @@ function emptyModel(): ModelEntry {
 }
 
 export function ProviderManager() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [roles, setRoles] = useState<RoleDef[]>([])
   const [presets, setPresets] = useState<ProviderPreset[]>([])
@@ -63,12 +68,15 @@ export function ProviderManager() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [phase, setPhase] = useState<'check' | 'fetch' | null>(null)
+  const [fetching, setFetching] = useState(false)
+  // 票 19：配置读回前槽位行会随绑定重挂（SlotRow 的 key 含绑定），聚焦要等首次读回之后。
+  const [loaded, setLoaded] = useState(false)
 
   const reload = async (keepSel?: string) => {
     try {
       const d = await api.listProviders()
       setDoc(d)
+      setLoaded(true)
       const s = keepSel ?? sel
       if (s && !s.startsWith('preset:') && s !== 'new') {
         const p = d.providers.find((x) => x.id === s)
@@ -84,6 +92,16 @@ export function ProviderManager() {
     api.providerPresets().then(setPresets).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 票 19（规范 E3 补设计）：从时间线「去设置绑定出图模型」进来时，目标槽那一行滚入视区、供应商下拉拿焦点。
+  useEffect(() => {
+    if (!loaded) return
+    const slot = takeSlotFocus()
+    if (!slot) return
+    const row = [...document.querySelectorAll<HTMLElement>('[data-slot-row]')].find((el) => el.dataset.slotRow === slot)
+    row?.scrollIntoView?.({ block: 'center' })
+    row?.querySelector('select')?.focus()
+  }, [loaded])
 
   // 已配置的按 id（预设 id 即保存后的供应商 id）或同名（gap B13 前按名称 slug 存下的旧供应商）排除。
   const configuredNames = useMemo(() => new Set(doc.providers.map((p) => p.name)), [doc])
@@ -137,10 +155,24 @@ export function ProviderManager() {
     }
   }
 
+  /**
+   * 启停只存「已保存的那份」配置的 enabled，不连带详情里未保存的编辑；重新读档后把编辑放回（只同步 enabled）。
+   * owner-followups-1015 #30 第 5 项：开关从列表行移到详情头部后，开关旁就是正在改的表单——曾经的行内写法
+   * `reload()` 会用存档覆盖 draft，在详情里点开关会冲掉没保存的改动。
+   */
   const toggleEnabled = async (p: ProviderView) => {
-    await api.saveProvider({ ...p, enabled: !p.enabled }).catch((e) => setErr(errText(e)))
+    const enabled = !p.enabled
+    try {
+      await api.saveProvider({ ...p, enabled })
+    } catch (e) {
+      setErr(errText(e))
+      return
+    }
+    const editing = draft?.id === p.id ? draft : null
     await reload()
+    if (editing) setDraft({ ...editing, enabled })
   }
+  const savedSel = draft ? doc.providers.find((p) => p.id === draft.id) ?? null : null
 
   const del = async () => {
     if (!draft) return
@@ -150,27 +182,28 @@ export function ProviderManager() {
     await reload('')
   }
 
+  /// 拉取模型目录失败的原因文案。owner-followups-1015 #03：core 的码面与连接检测同词，
+  /// 文案复用向导的 `wizard.probe.reason.*`；缺钥匙单列——向导那句「输入后自动检测」在设置页不成立。
+  const catalogReason = (e: unknown) => {
+    const { code } = asCmdError(e)
+    if (code === 'missing_credential') return t('providers.missingKeyReason')
+    const key = `wizard.probe.reason.${code}`
+    return i18n.exists(key) ? t(key) : errText(e)
+  }
+
   /// review R3（settings#models「检测并拉取模型」，原型一个按钮）：曾是「检测」+ 模型目录头「拉取列表」两个按钮，
-  /// 实际调同一函数。合并为一个按钮两段状态——① 检测连接（要钥匙的端点先 probe 一次，失败就停在原因上，
-  /// 不拉列表；本地端点不需要钥匙，probe 会报 missing_credential，所以跳过）→ ② 拉取模型并合并进 draft.models
-  /// （保留已有能力标记）。
+  /// 实际调同一函数，合为一个。owner-followups-1015 #03：合并后曾分两段——先 probe_provider_key 检测连接、
+  /// 再 fetch_provider_models 拉目录——两段请求的是同一个模型目录，一次点击打两次服务商。现在只拉一次：
+  /// 失败码即连接检测的原因词（core `AdminError::Catalog`），成功合并进 draft.models（保留已有能力 / 手填窗口）。
+  /// 向导只检测不拉取，仍用 probe_provider_key。
   const probeAndMerge = async () => {
     if (!draft) return
     setBusy(true)
+    setFetching(true)
     setProbe(null)
     try {
-      setPhase('check')
-      await save(secret.trim() || undefined) // 先落配置+key 再检测
+      await save(secret.trim() || undefined) // 先落配置+key 再拉取
       const id = draft.id || slug(draft.name)
-      if (!isLocalEndpoint(draft.base_url)) {
-        const check = await api.probeProviderKey({ id, name: draft.name, kind: draft.kind, base_url: draft.base_url, models: [], enabled: draft.enabled }, undefined, '')
-        if (!check.ok) {
-          const reason = check.failure ?? 'invalid_response'
-          setProbe({ ok: false, text: t(`wizard.probe.reason.${reason}`, { defaultValue: t('wizard.probe.reason.invalid_response') }) })
-          return
-        }
-      }
-      setPhase('fetch')
       const ids = await api.fetchProviderModels(id)
       const byId = new Map(draft.models.map((m) => [m.id, m]))
       const merged = ids.map((m) => {
@@ -184,10 +217,10 @@ export function ProviderManager() {
       setProbe({ ok: true, text: t('providers.checkOk', { count: ids.length }) })
       await reload(def.id)
     } catch (e) {
-      setProbe({ ok: false, text: errText(e) })
+      setProbe({ ok: false, text: catalogReason(e) })
     } finally {
       setBusy(false)
-      setPhase(null)
+      setFetching(false)
     }
   }
 
@@ -217,7 +250,7 @@ export function ProviderManager() {
       setEditModel((current) => current?.id === id ? {
         ...current, caps: model.caps, context_window: model.context_window, max_output: model.max_output,
       } : current)
-    } catch (e) { setErr(errText(e)) }
+    } catch (e) { setErr(catalogReason(e)) }
     finally { setBusy(false) }
   }
 
@@ -254,13 +287,11 @@ export function ProviderManager() {
     await reload()
   }
 
-  const previewUrl = (() => {
-    if (!draft) return ''
-    const base = draft.base_url.replace(/\/+$/, '')
-    if (draft.kind === 'anthropic') return `${base}/v1/messages`
-    if (draft.kind === 'jev') return `${base}/v1/systemone`
-    return `${base}/chat/completions`
-  })()
+  // #22：目录条目的说明（官网 / 文档 / 示例模型）——选中预设，或已按预设 id 存下的供应商。
+  const catalog = presetOf(presets, draft?.id)
+
+  // 票 21：实际请求地址由 core provider_url 算（与保存同一道规范化）；遮蔽的已存地址不预览。
+  const previewUrl = useRequestUrl(draft?.kind ?? 'openai', draft?.base_url ?? '')
 
   // ui-audit-2 票 10：本地端点（Ollama/LM Studio）不需要 key——检测不禁用
   const needsKey = !!draft && !isLocalEndpoint(draft.base_url)
@@ -275,9 +306,10 @@ export function ProviderManager() {
       if (!b) continue
       bound += 1
       const p = doc.providers.find((x) => x.id === b.provider_id)
-      if (!p?.enabled || !p.key_set) blocked += 1
+      if (!p?.enabled || !providerKeyReady(p)) blocked += 1
     }
-    const missingKey = doc.providers.filter((p) => p.enabled && !p.key_set).length
+    // 票 25：本机回环端点不算缺钥匙
+    const missingKey = doc.providers.filter((p) => p.enabled && !providerKeyReady(p)).length
     return { total: slotNames.length, bound, blocked, missingKey }
   }, [slotNames, doc])
 
@@ -285,8 +317,9 @@ export function ProviderManager() {
   // ● 已存钥匙 / ◐ 缺钥匙橙 / ○ 停用 + 字母头像 + 行内开关），详情 = 头（大字母头像 + 名 + 端点「· 自动推导」+ 删除）、
   // API Key 与「检测并拉取模型」、模型卡（等宽名 + 窗口 chip + 能力图标 + 编辑）、槽位绑定表。
   type Item = { key: string; preset: boolean; p: ProviderView | ProviderPreset }
+  // owner-followups-1015 #22：已配置组里已启用的在前（目录约 59 条，靠搜索找）。
   const items: Item[] = [
-    ...doc.providers.map((p) => ({ key: p.id, preset: false, p })),
+    ...enabledFirst(doc.providers).map((p) => ({ key: p.id, preset: false, p })),
     ...unconfiguredPresets.map((p) => ({ key: `preset:${p.id}`, preset: true, p })),
   ]
 
@@ -350,7 +383,7 @@ export function ProviderManager() {
       <SubHead aside={
         <span className="text-[12px] text-ink-3">
           {t('providers.slotsSummary', { bound: slotStats.bound, total: slotStats.total })}
-          {slotStats.missingKey > 0 && <span className="text-orange"> · {t('providers.slotsMissingKey', { count: slotStats.missingKey })}</span>}
+          {slotStats.missingKey > 0 && <span className="text-orange-ink"> · {t('providers.slotsMissingKey', { count: slotStats.missingKey })}</span>}
         </span>
       }>{t('providers.slots')}</SubHead>
       <p className="-mt-1 mb-2 text-[12px] text-ink-3">{t('providers.slotsHint')}</p>
@@ -365,7 +398,7 @@ export function ProviderManager() {
         {slotNames.map((slot) => {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
-          const ready = !!(b && bp?.enabled && bp.key_set)
+          const ready = !!(b && bp?.enabled && providerKeyReady(bp))
           // 2026-09-28 重启后固定槽曾显示空白但标已绑：行先于配置挂载，
           // 仅以 slot 作 key 会保留初始空草稿。已保存绑定变化才重置，普通刷新保留编辑。
           return (
@@ -375,6 +408,7 @@ export function ProviderManager() {
               binding={b}
               bindingProvider={bp}
               providers={doc.providers}
+              iconKey={(id) => iconKeyOf(presets, id)}
               ready={ready}
               onBind={bind}
               onUnbind={async (s) => { await api.removeSlotBinding(s).catch(() => {}); await reload() }}
@@ -392,10 +426,9 @@ export function ProviderManager() {
       label={t('settings.nav_models')}
       items={items}
       itemKey={(it) => it.key}
-      filterText={(it) => it.p.name}
+      filterText={(it) => searchText(it.p)}
       groupOf={(it) => (it.preset ? 'preset' : 'configured')}
       groupLabel={(g) => t(g === 'preset' ? 'settingsUi.providersCatalog' : 'settingsUi.providersConfigured')}
-      itemDim={(it) => !it.preset && !(it.p as ProviderView).enabled}
       selected={sel && sel !== 'new' ? sel : null}
       onSelect={(k) => { if (k) pick(k) }}
       searchPlaceholder={t('providers.filter')}
@@ -407,7 +440,7 @@ export function ProviderManager() {
         if (it.preset) {
           return (
             <>
-              <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-[10px] font-semibold text-ink-2">{it.p.name.slice(0, 1)}</span>
+              <ProviderIcon iconKey={(it.p as ProviderPreset).icon_key} size={20} />
               <div className="min-w-0 flex-1 truncate text-ink-3">{it.p.name}</div>
               {isLocalEndpoint(it.p.base_url) && <span className="text-[12px] text-ink-3">{t('settingsUi.local')}</span>}
             </>
@@ -417,18 +450,15 @@ export function ProviderManager() {
         return (
           <>
             {/* 配置状态点：●已配 key / ◐缺 key（橙）/ ○停用——不用点进去就知道能不能用 */}
-            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}>
-              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocalEndpoint(p.base_url) ? 'on' : 'warn'} />
+            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : isLocalEndpoint(p.base_url) ? t('settingsUi.local') : t('providers.keyMissing')}>
+              <Dot tone={!p.enabled ? 'off' : providerKeyReady(p) ? 'on' : 'warn'} />
             </span>
-            <Avatar agentId={p.id} name={p.name} size={18} />
+            {/* #23：品牌图标只按 id 对上预设取 icon_key；自定义供应商（id 不在预设里）一律中性图标 */}
+            <ProviderIcon iconKey={iconKeyOf(presets, p.id)} size={20} />
             <div className="min-w-0 flex-1 truncate">{p.name}</div>
-            <Switch
-              aria-label={`${t('providers.enabled')} ${p.name}`}
-              checked={p.enabled}
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-              onCheckedChange={() => toggleEnabled(p)}
-            />
+            {/* owner-followups-1015 #30（E2「列表行不嵌开关」，票 10 后续）：行内曾嵌 Switch（option 里有可交互后代，
+                axe nested-interactive）且停用行整行 opacity .6；现在行只表状态，开关在详情头部。左侧状态点已表 off，胶囊不再带点。 */}
+            {!p.enabled && <DisabledChip />}
           </>
         )
       }}
@@ -439,12 +469,19 @@ export function ProviderManager() {
         ) : (
           <>
             <DetailHead
-              lead={<Avatar agentId={draft.id || draft.name} name={draft.name || '?'} size={40} />}
+              lead={<ProviderIcon iconKey={catalog?.icon_key ?? ''} size={28} />}
               title={draft.name || t('providers.add')}
-              sub={draft.base_url ? `${previewUrl} · ${t('providers.autoUrl')}` : t('providers.unsaved')}
+              sub={previewUrl ? `${previewUrl} · ${t('providers.autoUrl')}` : draft.base_url || t('providers.unsaved')}
               mono={!!draft.base_url}
-              actions={selConfigured && (
-                <Button size="sm" variant="ghost" className="text-red" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
+              actions={savedSel && (
+                <>
+                  {/* #30（E2）：启停开关只在详情头部，存的是已保存配置（见 toggleEnabled）；label 包裹 = 文字也可点（A10 命中区） */}
+                  <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+                    {t('providers.enabled')}
+                    <Switch aria-label={t('providers.enabled')} checked={savedSel.enabled} onCheckedChange={() => toggleEnabled(savedSel)} />
+                  </label>
+                  <Button size="sm" variant="ghost" className="text-red-ink" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
+                </>
               )}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -461,12 +498,14 @@ export function ProviderManager() {
                 </NativeSelect>
               </Field>
             </div>
-            <Field className="mt-3" label={t('providers.baseUrl')}>
+            <Field className="mt-3" label={t('providers.baseUrl')}
+              help={previewUrl ? <RequestUrlNote url={previewUrl} /> : catalog && !draft.base_url.trim() ? t('providers.catalogNoAddress') : undefined}>
               <Input aria-label={t('providers.baseUrl')} className="font-mono text-[12px]" value={draft.base_url} placeholder="https://…/v1"
                 onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
             </Field>
+            {catalog && <CatalogInfo preset={catalog} />}
             <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
-              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : t('providers.keyMissing')}>
+              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : needsKey ? t('providers.keyMissing') : undefined}>
                 <Input
                   aria-label={t('providers.key')}
                   className="font-mono"
@@ -485,11 +524,11 @@ export function ProviderManager() {
                 className="mb-[22px]" disabled={probeDisabled} loading={busy} onClick={probeAndMerge}
                 title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
               >
-                {!busy && <Icon name="refresh" size={14} />}{t(phase === 'check' ? 'providers.checking' : phase === 'fetch' ? 'providers.fetch' : 'providers.check')}
+                {!busy && <Icon name="refresh" size={14} />}{t(fetching ? 'providers.fetch' : 'providers.check')}
               </Button>
             </div>
             {probe && (
-              <div role="status" className={`mt-1 text-[12.5px] ${probe.ok ? 'text-green' : 'text-red'}`}>{probe.text}</div>
+              <div role="status" className={`mt-1 text-[12.5px] ${probe.ok ? 'text-green-ink' : 'text-red-ink'}`}>{probe.text}</div>
             )}
 
             {/* ---- 模型目录 ---- */}
@@ -545,7 +584,7 @@ export function ProviderManager() {
               </div>
             )}
 
-            {err && <div role="alert" className="mt-2 text-[12.5px] text-red">{err}</div>}
+            {err && <div role="alert" className="mt-2 text-[12.5px] text-red-ink">{err}</div>}
             <div className="mt-4 flex items-center gap-2">
               {!selConfigured && <span className="text-[12px] text-ink-3">{t('providers.unsaved')}</span>}
               <span className="flex-1" />
@@ -567,12 +606,13 @@ export function ProviderManager() {
 /// 一个槽位的绑定行（A21 行形）：槽名 code + 供应商下拉 + 模型输入（datalist 供选）+ 绑定 / 解绑 + 状态。
 /// 状态：就绪 ok · 绑定的供应商缺钥匙或停用 warn · default 未绑 warn · 其他未绑走默认回退 neutral。
 function SlotRow({
-  slot, binding, bindingProvider, providers, ready, onBind, onUnbind,
+  slot, binding, bindingProvider, providers, iconKey, ready, onBind, onUnbind,
 }: {
   slot: string
   binding?: { provider_id: string; model: string }
   bindingProvider?: ProviderView
   providers: ProviderView[]
+  iconKey: (providerId: string) => string
   ready: boolean
   onBind: (slot: string, providerId: string, model: string) => void
   onUnbind: (slot: string) => void
@@ -611,12 +651,16 @@ function SlotRow({
         <span className="[overflow-wrap:anywhere]">{label}</span>
         {isBuiltinSlot(slot) && <span className="truncate font-mono text-[11px] text-ink-3">{slot}</span>}
       </code>
-      <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px]" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
-        <option value="">{t('providers.pickProvider')}</option>
-        {enabled.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </NativeSelect>
+      {/* #23：原生 <option> 画不了图，槽位表把所选服务商的 16 图标挂在下拉前；未选不画 */}
+      <span className="flex min-w-0 items-center gap-1.5">
+        {pid && <ProviderIcon iconKey={iconKey(pid)} size={16} />}
+        <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px] min-w-0 flex-1" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
+          <option value="">{t('providers.pickProvider')}</option>
+          {enabled.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </NativeSelect>
+      </span>
       <Input
         aria-label={`${label} · ${t('providers.model')}`}
         className="h-[30px] font-mono text-[12px]" list={`models-${slot}`}
@@ -633,5 +677,35 @@ function SlotRow({
       {/* data-slot-state 挂在行的直接子元素上：测试按 parentElement 回到行 */}
       <span data-slot-state={state} className="inline-flex justify-end">{chip}</span>
     </div>
+  )
+}
+
+/// 目录条目说明（owner-followups-1015 #22，E3）：官网 / 文档地址（等宽可选中，桌面壳不开外链）
+/// 与登记的示例模型——只作参考，不预填默认模型，模型靠「检测并拉取」。没有任何说明时不出。
+function CatalogInfo({ preset }: { preset: ProviderPreset }) {
+  const { t } = useTranslation()
+  const rows: [string, string][] = [
+    [t('providers.catalogWebsite'), preset.website],
+    [t('providers.catalogDocs'), preset.docs],
+  ].filter((r): r is [string, string] => !!r[1])
+  if (rows.length === 0 && preset.sample_models.length === 0) return null
+  return (
+    <dl data-catalog-info className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px] text-ink-3">
+      {rows.map(([k, v]) => (
+        <Fragment key={k}>
+          <dt>{k}</dt>
+          <dd className="min-w-0 font-mono break-all select-text">{v}</dd>
+        </Fragment>
+      ))}
+      {preset.sample_models.length > 0 && (
+        <>
+          <dt>{t('providers.catalogSamples')}</dt>
+          <dd data-sample-models className="min-w-0">
+            <span className="font-mono break-all">{preset.sample_models.join(' · ')}</span>
+            <span className="block">{t('providers.catalogSamplesHint')}</span>
+          </dd>
+        </>
+      )}
+    </dl>
   )
 }

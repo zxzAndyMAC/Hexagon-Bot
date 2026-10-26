@@ -63,7 +63,7 @@ export function ExperienceHistory({ projectRoot, skill, entryId, onRelated }: {
         {(['sources', 'versions', 'related'] as const).map((value) => <option key={value} value={value}>{t(`experience.${value}`)}</option>)}
       </NativeSelect>
     </label>
-    {error && <p role="alert" className="mb-2 text-[12.5px] text-red">{error}</p>}
+    {error && <p role="alert" className="mb-2 text-[12.5px] text-red-ink">{error}</p>}
     {/* 功能缺口 C3（A19）：说明为什么空 + 动作「刷新」（新的评审 / 修订进来后重读）。 */}
     {page?.items.length === 0 && <Empty size="sm" icon="book" title={t('experience.emptyHistory')} desc={t(`experience.emptyHistoryBody_${kind}`)}
       action={<Button size="sm" disabled={busy} onClick={() => void load(null)}>{t('experience.refreshHistory')}</Button>} />}

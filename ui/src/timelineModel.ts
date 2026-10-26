@@ -14,7 +14,8 @@ export const DECISION_KINDS = new Set([
   'stamped', 'stamp_rejected', 'flag_submitted', 'flag_adjudicated', 'escalated',
   'proposal_queued', 'proposal_reviewed', 'proposal_stamped', 'proposal_rejected',
   'proposal_activated', 'proposal_rolled_back',
-  'publish_requested', 'publish_confirmed', 'publish_rejected', 'publish_failed',
+  'push_requested', 'push_confirmed', 'push_rejected', 'push_failed',
+  'release_requested', 'release_confirmed', 'release_rejected', 'release_failed',
   'autonomy_changed', 'baseline_merged', 'stage_rewound',
   'pm_routed',
 ])
@@ -172,6 +173,13 @@ const isHighRiskSys = (it: TimelineItem) =>
   it.event.kind === 'turn_failed' ||
   (it.event.kind === 'system' && SYS_HIGH_RISK.has(String(it.event.payload?.kind ?? '')))
 
+/** 画师发言（system 子类，带名字、头像和按钮）：票 19 缺出图模型提示、票 28 写不出提示词、票 20 头像提案。
+ * ticket 33 P2（2026-10-25 批次审查）：它们是 system 事件、不带 message，原来在「消息」「决策」筛选下整条消失——
+ * 负责人要点的按钮（选模型 / 应用头像）跟着不见。这三类在每个筛选档都可见。 */
+export const ARTIST_SPEECH_KINDS = new Set(['artist_image_model_missing', 'artist_prompt_failed', 'artist_avatar_proposal'])
+export const isArtistSpeech = (it: TimelineItem) =>
+  it.event.kind === 'system' && ARTIST_SPEECH_KINDS.has(String(it.event.payload?.kind ?? ''))
+
 const isSysItem = (it: TimelineItem) =>
   // test3/04: saving a decision is visible before the background tool runs;
   // folding it hid the only acknowledgement during a peer's long model call.
@@ -179,6 +187,8 @@ const isSysItem = (it: TimelineItem) =>
   it.event.payload.kind !== 'tool_execution_started' &&
   it.event.payload.kind !== 'agent_plan' &&
   it.event.payload.kind !== 'managed_decision' &&
+  // 票 19 / 28 / 20：画师的提示是画师在发言（带名字、头像和按钮），不是可折的系统注记。
+  !isArtistSpeech(it) &&
   !TOOL_KINDS.has(it.event.kind) &&
   !SPECIAL_KINDS.has(it.event.kind) &&
   it.message == null &&
@@ -278,7 +288,7 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
         })
         continue
       }
-      if (it.message != null || isHighRiskSys(it) || DECISION_KINDS.has(it.event.kind) || isManagedDecision(it)) {
+      if (it.message != null || isHighRiskSys(it) || DECISION_KINDS.has(it.event.kind) || isManagedDecision(it) || isArtistSpeech(it)) {
         rows.push({ type: 'item', item: it, idx: it.event.id })
       }
     }
@@ -286,8 +296,8 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
   }
   const vis = timeline.filter((it) =>
     filter === 'all' ? true
-    : filter === 'messages' ? it.message != null
-    : DECISION_KINDS.has(it.event.kind) || isManagedDecision(it),
+    : filter === 'messages' ? it.message != null || isArtistSpeech(it)
+    : DECISION_KINDS.has(it.event.kind) || isManagedDecision(it) || isArtistSpeech(it),
   )
   const rows: Row[] = []
   for (const it of vis) {

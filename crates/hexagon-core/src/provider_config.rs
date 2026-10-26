@@ -301,7 +301,8 @@ pub fn image_generation_slot(doc: &ProviderDoc) -> ImageGenerationSlot {
     }
 }
 
-/// 槽位就绪判定（给向导/创建闸）：有绑定 + 供应商存在且启用 + key 已存。
+/// 槽位就绪判定（给向导/创建闸）：有绑定 + 供应商存在且启用 + key 已存
+/// （本机回环端点免钥匙，票 25，见 `provider_loopback`）。
 /// `default` 槽的绑定兜底任何槽。
 pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) -> bool {
     let bound = resolve_slot(&doc.slots, slot);
@@ -309,12 +310,17 @@ pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) ->
     let Some(p) = doc.providers.iter().find(|p| p.id == b.provider_id) else {
         return false;
     };
-    p.enabled
-        && store
-            .get(&crate::credentials::provider_key_name(&p.id))
-            .ok()
-            .flatten()
-            .is_some()
+    if !p.enabled {
+        return false;
+    }
+    let key = store
+        .get(&crate::credentials::provider_key_name(&p.id))
+        .ok()
+        .flatten();
+    !matches!(
+        crate::provider_loopback::decide(key, &p.base_url),
+        crate::provider_loopback::Auth::Missing
+    )
 }
 
 /// 从配置造一个真实供应商；key 在调用时才从 creds 取（轮换不用重启）。
@@ -420,7 +426,10 @@ pub(crate) fn status_class(status: u16) -> &'static str {
 
 /// Jev 没有模型目录接口。用一道最小是非题确认钥匙，目录只放响应里的模型名，
 /// 没有则回落 `jev-latest`。
-fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, CatalogFailure> {
+fn fetch_jev_models(
+    def: &ProviderDef,
+    key: Option<&str>,
+) -> Result<Vec<ModelEntry>, CatalogFailure> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(30)))
         .build()
@@ -432,9 +441,9 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Cat
             "ok": { "type": "noul", "instructions": "Is this a connectivity check?" }
         }
     });
-    let mut resp = agent
-        .post(crate::provider::systemone_url(&def.base_url))
-        .header("Authorization", &format!("Bearer {key}"))
+    let bearer = key.map(|k| format!("Bearer {k}"));
+    let req = agent.post(crate::provider::systemone_url(&def.base_url));
+    let mut resp = crate::provider_loopback::header(req, "Authorization", bearer.as_deref())
         .send_json(&body)
         .map_err(|e| CatalogFailure::request(&e))?;
     let v: Value = resp
@@ -460,14 +469,16 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Cat
 /// Reliability 22: ureq BadUri used to echo authentication URLs into UI errors.
 /// Never return raw transport/parser errors, which can contain credentials.
 pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
-    fetch_catalog(def, key).map_err(|f| ProvidersError::Http(f.legacy.into()))
+    fetch_catalog(def, Some(key)).map_err(|f| ProvidersError::Http(f.legacy.into()))
 }
 
 /// 同 [`fetch_models`]，失败带分类（gap B4：向导实时检测要说清原因）。
 /// 分类只看 HTTP 状态与 ureq 错误种类，不带响应正文或 URL（Reliability 22 同理：原文可能含凭据）。
+/// `key` 为 None = 本机端点免钥匙（票 25，判定在 `provider_loopback::decide`，调用方先分流）：
+/// 不带任何鉴权头。
 pub(crate) fn fetch_catalog(
     def: &ProviderDef,
-    key: &str,
+    key: Option<&str>,
 ) -> Result<Vec<ModelEntry>, CatalogFailure> {
     let base = def.base_url.trim_end_matches('/');
     if url::Url::parse(base).is_err() {
@@ -482,10 +493,12 @@ pub(crate) fn fetch_catalog(
     let google = url::Url::parse(base).ok().is_some_and(|u| {
         u.host_str() == Some("generativelanguage.googleapis.com") && u.path() == "/v1beta/openai"
     });
+    // 票 21：目录地址与对话请求同根（完整端点存储值先去掉端点尾），见 provider_url。
     let url = match def.kind {
         ProviderKind::OpenAi if google => format!("{}/models", base.trim_end_matches("/openai")),
-        ProviderKind::Anthropic => format!("{base}/v1/models"),
-        ProviderKind::OpenAi => format!("{base}/models"),
+        ProviderKind::Anthropic | ProviderKind::OpenAi => {
+            crate::provider_url::models_url(&def.kind, base)
+        }
         // Jev 没有 /models。用一道最小选择题确认钥匙，模型名以响应为准。
         ProviderKind::Jev => return fetch_jev_models(def, key),
     };
@@ -513,12 +526,16 @@ pub(crate) fn fetch_catalog(
         } else {
             req
         };
+        let bearer = key.map(|k| format!("Bearer {k}"));
         let req = match def.kind {
-            ProviderKind::Anthropic => req
-                .header("x-api-key", key)
+            ProviderKind::Anthropic => crate::provider_loopback::header(req, "x-api-key", key)
                 .header("anthropic-version", "2023-06-01"),
-            ProviderKind::OpenAi if google => req.header("x-goog-api-key", key),
-            ProviderKind::OpenAi => req.header("Authorization", &format!("Bearer {key}")),
+            ProviderKind::OpenAi if google => {
+                crate::provider_loopback::header(req, "x-goog-api-key", key)
+            }
+            ProviderKind::OpenAi => {
+                crate::provider_loopback::header(req, "Authorization", bearer.as_deref())
+            }
             ProviderKind::Jev => unreachable!("jev returns before the models request"),
         };
         let mut resp = req.call().map_err(|e| CatalogFailure::request(&e))?;

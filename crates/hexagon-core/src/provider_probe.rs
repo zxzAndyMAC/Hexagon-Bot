@@ -55,9 +55,12 @@ pub fn probe_key(
 ) -> Result<KeyProbe, crate::provider_admin::AdminError> {
     let doc = provider_config::load()?;
     let current = doc.providers.iter().find(|p| p.id == def.id);
-    let Ok(base_url) =
-        crate::data_boundary::restore(&def.base_url, current.map(|p| p.base_url.as_str()), true)
-    else {
+    // 票 21：与保存同一道规范化，检测的就是将要保存的那个地址。
+    let Ok(base_url) = crate::provider_url::resolve_input(
+        &def.kind,
+        &def.base_url,
+        current.map(|p| p.base_url.as_str()),
+    ) else {
         return Ok(KeyProbe::failed("invalid_url", None));
     };
     if base_url.trim().is_empty() {
@@ -68,16 +71,15 @@ pub fn probe_key(
         .filter(|s| !s.is_empty());
     let key = match typed {
         Some(k) => Some(k),
-        None => store
-            .get(&provider_key_name(&def.id))?
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty()),
+        None => store.get(&provider_key_name(&def.id))?,
     };
-    let Some(key) = key else {
+    // 票 25：判定看规范化后的地址——检测的就是将要保存、将要请求的那一个。
+    let auth = crate::provider_loopback::decide(key, &base_url);
+    if auth == crate::provider_loopback::Auth::Missing {
         return Ok(KeyProbe::failed("missing_credential", None));
-    };
+    }
     let def = ProviderDef { base_url, ..def };
-    let catalog = match provider_config::fetch_catalog(&def, &key) {
+    let catalog = match provider_config::fetch_catalog(&def, auth.key()) {
         Ok(c) => c,
         Err(f) => return Ok(KeyProbe::failed(f.code, f.status)),
     };
@@ -157,7 +159,8 @@ mod tests {
         )
         .unwrap();
         let request = server.join().unwrap();
-        assert!(request.starts_with("GET /models"));
+        // 票 21：新填的无版本 OpenAI 兼容地址规范化补 `/v1`（曾请求 `/models`）。
+        assert!(request.starts_with("GET /v1/models"), "{request}");
         assert!(request.contains("Bearer sk-typed"));
         assert_eq!(
             got,
@@ -169,6 +172,51 @@ mod tests {
                 window: Some(200000),
             }
         );
+    }
+
+    /// 票 21：检测与保存走同一道规范化——填完整端点也检测那一个服务（不再拼成
+    /// `…/chat/completions/models`）。
+    #[test]
+    fn typed_full_endpoint_probes_its_own_catalog() {
+        let _doc = provider_config::fixture_document(Default::default());
+        let (url, server) = serve_once("200 OK", r#"{"data":[]}"#.into());
+        let got = probe_key(
+            def(format!("{url}/chat/completions")),
+            Some("k".into()),
+            "",
+            &MemoryStore::default(),
+        )
+        .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("GET /models "), "{request}");
+        assert!(got.ok);
+    }
+
+    /// 票 21：保存新填地址时规范化；已存地址（遮蔽形原样送回）不动。
+    #[test]
+    fn save_normalizes_typed_urls_but_keeps_saved_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let stored = || {
+            provider_config::load().unwrap().providers[0]
+                .base_url
+                .clone()
+        };
+
+        crate::provider_admin::save(def("https://api.deepseek.com/".into()), None, &store).unwrap();
+        assert_eq!(stored(), "https://api.deepseek.com/v1");
+
+        // 升级前存下的无版本地址：界面拿到遮蔽形，原样送回 → 存储值逐字不变。
+        let mut legacy = provider_config::load().unwrap();
+        legacy.providers[0].base_url = "https://api.perplexity.ai".into();
+        provider_config::save_provider(&legacy.providers[0]).unwrap();
+        let shown = crate::provider_admin::list(&store).unwrap().providers[0]
+            .def
+            .base_url
+            .clone();
+        crate::provider_admin::save(def(shown), None, &store).unwrap();
+        assert_eq!(stored(), "https://api.perplexity.ai");
     }
 
     #[test]
@@ -230,14 +278,114 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got.failure.as_deref(), Some("invalid_url"));
+        // 票 25：缺钥匙只对非回环主机成立（回环免钥匙，见 keyless_* 用例）。
         let got = probe_key(
-            def("http://127.0.0.1:9".into()),
+            def("http://remote.invalid:9".into()),
             None,
             "m",
             &MemoryStore::default(),
         )
         .unwrap();
         assert_eq!(got.failure.as_deref(), Some("missing_credential"));
+    }
+
+    /// owner-followups-1015 #03：设置页「检测并拉取」曾先 probe 再 fetch，同一目录请求两次；
+    /// 改为只调 `provider_admin::fetch_models` 一次后，失败码必须与连接检测同一套词，
+    /// 界面才能给同样可操作的原因（而不是笼统的「provider request or response failed」）。
+    #[test]
+    fn fetch_models_failures_carry_the_probe_reason() {
+        use crate::errcode::ErrorCode;
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let fetch_code = |url: String, key: Option<&str>| {
+            crate::provider_admin::save(def(url), key.map(Into::into), &store).unwrap();
+            crate::provider_admin::fetch_models("probe", &store)
+                .unwrap_err()
+                .code()
+        };
+
+        assert_eq!(
+            fetch_code("http://remote.invalid:9".into(), None),
+            "missing_credential"
+        );
+
+        let (url, server) = serve_once("401 Unauthorized", "{}".into());
+        let code = fetch_code(url, Some("k"));
+        server.join().unwrap();
+        assert_eq!(code, "authentication");
+
+        let (url, server) = serve_once("200 OK", r#"{"nope":1}"#.into());
+        let code = fetch_code(url, Some("k"));
+        server.join().unwrap();
+        assert_eq!(code, "invalid_response");
+
+        let (url, server) = serve_once("200 OK", r#"{"data":[{"id":"m-1"}]}"#.into());
+        crate::provider_admin::save(def(url), None, &store).unwrap();
+        let models = crate::provider_admin::fetch_models("probe", &store).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m-1"]
+        );
+    }
+
+    /// 票 25：回环 + 无钥匙 → 检测与拉取都直接请求、不带鉴权头（曾报 missing_credential，
+    /// 本机 Ollama / LM Studio 只能填假钥匙）；回环 + 有钥匙照常带头；非回环无钥匙仍拒。
+    #[test]
+    fn loopback_without_key_probes_and_fetches_without_auth_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let body = || serde_json::json!({"data":[{"id":"llama3"}]}).to_string();
+
+        let (url, server) = serve_once("200 OK", body());
+        let got = probe_key(def(url.clone()), None, "llama3", &store).unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(got.ok, "{got:?}");
+        assert_eq!(got.model_listed, Some(true));
+        assert!(!request.contains("authorization"), "{request}");
+
+        let (url, server) = serve_once("200 OK", body());
+        crate::provider_admin::save(def(url), None, &store).unwrap();
+        let models = crate::provider_admin::fetch_models("probe", &store).unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert_eq!(models[0].id, "llama3");
+        assert!(!request.contains("authorization"), "{request}");
+
+        // 回环 + 有钥匙：照常带头（免钥匙只在没钥匙时生效）。
+        let (url, server) = serve_once("200 OK", body());
+        crate::provider_admin::save(def(url), Some("sk-local".into()), &store).unwrap();
+        crate::provider_admin::fetch_models("probe", &store).unwrap();
+        assert!(server.join().unwrap().contains("Bearer sk-local"));
+
+        // 主机名形似回环的远端：仍 missing_credential，不发请求。
+        let got = probe_key(
+            def("http://localhost.evil.invalid:9".into()),
+            None,
+            "m",
+            &MemoryStore::default(),
+        )
+        .unwrap();
+        assert_eq!(got.failure.as_deref(), Some("missing_credential"));
+    }
+
+    /// 票 25：主对话槽「缺密钥不能激活」对回环服务商放宽——slot_ready 与对话请求同口径。
+    #[test]
+    fn loopback_slot_is_ready_without_key_but_remote_is_not() {
+        let mut doc = provider_config::ProviderDoc::default();
+        doc.providers.push(def("http://127.0.0.1:11434".into()));
+        doc.slots.insert(
+            "default".into(),
+            provider_config::SlotBinding {
+                provider_id: "probe".into(),
+                model: "llama3".into(),
+            },
+        );
+        let store = MemoryStore::default();
+        assert!(provider_config::slot_ready(&doc, &store, "default"));
+        doc.providers[0].base_url = "https://api.example.com/v1".into();
+        assert!(!provider_config::slot_ready(&doc, &store, "default"));
     }
 
     proptest::proptest! {

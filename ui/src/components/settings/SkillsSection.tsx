@@ -1,6 +1,6 @@
 // 设置「技能」分区（ui-audit-2 票 04 → global-config 票 03 双栏；ui-redesign 票 11 换皮：settings#skills，
-// components E2 + E6）。左 = 已装列表（筛选 + 来源徽标 + 行内开关，>100 条虚拟列表），右 = 详情：
-// 头（名 + 来源 + 文件分段 + 编辑）、SKILL.md 渲染、项目技能附经验条目。projectless 时 list_skills 回落全局层。
+// components E2 + E6）。左 = 已装列表（筛选 + 来源徽标 + 停用胶囊，>100 条虚拟列表），右 = 详情：
+// 头（名 + 来源 + 文件分段 + 编辑 + 启用开关；#10 起开关只在这里，行内不嵌）、SKILL.md 渲染、项目技能附经验条目。projectless 时 list_skills 回落全局层。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, isTauri, type ExtSkillRow, type SkillRow } from '../../api'
@@ -17,7 +17,7 @@ import { ExperienceEntries } from '../ExperienceEntries'
 import { Icon } from '../Icon'
 import { LoadingState } from '../LoadingState'
 import { CodeBlock, Md } from '../Md'
-import { DetailHead, Empty, ListDetail, ScanPanel } from './kit'
+import { DetailHead, DisabledChip, Empty, ListDetail, ScanPanel } from './kit'
 import { useBusyAction } from '../../useBusyAction'
 
 /** 来源徽标（settings#skills）：项目 info / 全局 neutral / 内置 line。 */
@@ -31,7 +31,7 @@ export function OriginBadge({ origin, label }: { origin: string; label: string }
 
 /** 技能详情（global-config 票 03）：文件切换 + SKILL.md 渲染；全局技能可「编辑」成表单
  *  （名称 / 描述 / 正文 → save_global_skill 落 ~/.hexagon/skills/<name>/）；项目技能走带版本的项目命令。内置只读。 */
-function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void }) {
+function SkillDetail({ skill, onSaved, onToggle }: { skill: SkillRow; onSaved: () => void; onToggle: () => void }) {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
   const [files, setFiles] = useState<string[]>([])
@@ -148,13 +148,18 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
                 <Icon name={editing ? 'vision' : 'edit'} size={14} />{editing ? t('skills.view') : t('skills.edit')}
               </Button>
             )}
+            {/* #10（E2）：启用开关只在详情头部；label 包裹 = 文字也可点，命中区远超 24×24（A10） */}
+            <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+              {t('skills.enabled')}
+              <Switch aria-label={t('skills.enabled')} checked={skill.enabled} onCheckedChange={onToggle} />
+            </label>
           </>
         }
       />
-      {readError && <p role="alert" className="mt-3 text-[12.5px] text-red">{readError}</p>}
+      {readError && <p role="alert" className="mt-3 text-[12.5px] text-red-ink">{readError}</p>}
       {reading && <div className="mt-3"><LoadingState label={t('skills.loadingDetail')} /></div>}
       {!!skill.legacy_experience_blocks && (
-        <p role="status" className="mt-3 text-[12.5px] text-orange">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
+        <p role="status" className="mt-3 text-[12.5px] text-orange-ink">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
       )}
       {editing ? (
         <div data-skill-editor className="mt-4 flex flex-col gap-3">
@@ -338,13 +343,7 @@ export function SkillsSection() {
             <div className="truncate text-[12px] text-ink-3">{s.description}</div>
           </div>
           <OriginBadge origin={s.origin} label={t(`skills.origin_${s.origin}`)} />
-          <Switch
-            aria-label={`${t('skills.enabled')} ${s.name}`}
-            checked={s.enabled}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            onCheckedChange={() => toggle(s)}
-          />
+          {!s.enabled && <DisabledChip dot />}
         </>
       )}
       below={scanRows !== null && (
@@ -382,7 +381,7 @@ export function SkillsSection() {
       {creating ? (
         <NewSkillForm onCreated={async (name) => { setCreating(false); await load(); setSelected(name) }} />
       ) : selSkill ? (
-        <SkillDetail key={selSkill.name} skill={selSkill} onSaved={load} />
+        <SkillDetail key={selSkill.name} skill={selSkill} onSaved={load} onToggle={() => toggle(selSkill)} />
       ) : (
         <Empty icon="book" title={t('settings.nav_skills')} desc={t('skills.intro')} />
       )}

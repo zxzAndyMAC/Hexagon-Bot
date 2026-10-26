@@ -17,6 +17,7 @@ import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { EntityChips } from '../EntityPicker'
 import { Icon } from '../Icon'
 import { CreateRoleForm, RoleEditor } from '../RoleEditor'
+import { RestoreAvatarButton, useAvatarFile } from '../AvatarPicker'
 import { DetailHead, Empty, ListDetail } from './kit'
 
 /** 模板编辑表单（global-config 票 02）：内置行「编辑」= 同名覆盖层创建（改名即另存副本）；
@@ -104,7 +105,7 @@ function TemplateEditor({ def, names, isCustom, onDone }: {
       </div>
       <div className="mt-1 flex items-center gap-2">
         {isCustom && (
-          <Button size="sm" variant="ghost" className="text-red" disabled={busy} onClick={del}>
+          <Button size="sm" variant="ghost" className="text-red-ink" disabled={busy} onClick={del}>
             <Icon name="trash" size={14} />{t('teamTpl.delTpl')}
           </Button>
         )}
@@ -154,12 +155,25 @@ function AgentDetailPane({ member, tpls, onRemoved, onClose }: {
 }) {
   const { t } = useTranslation()
   const providers = useUiStore((s) => s.providers)
-  const avatars = useUiStore((s) => s.avatars)
   const invalidate = useUiStore((s) => s.invalidate)
   const pushToast = useUiStore((s) => s.pushToast)
   const askConfirm = useUiStore((s) => s.askConfirm)
   const [def, setDef] = useState<AgentDetail['def'] | null>(null)
   const sleeping = member.status === 'sleeping'
+  // 票 17：设置·团队详情头部改的是**角色头像**（该角色全部实例生效），头像显示角色图本身；
+  // 实例覆盖在画布 Agent 详情里改。成员行仍显示各自的生效图。
+  const [roleUrl, setRoleUrl] = useState<string | null>(null)
+  const loadRole = useCallback(() => {
+    let live = true
+    api.roleAvatar(member.role).then((u) => { if (live) setRoleUrl(u) }).catch(() => { if (live) setRoleUrl(null) })
+    return () => { live = false }
+  }, [member.role])
+  useEffect(loadRole, [loadRole, member.avatar_hash])
+  const roleFile = useAvatarFile(async (url) => {
+    await api.setRoleAvatar(member.role, url)
+    loadRole()
+    await invalidate('team')
+  })
 
   useEffect(() => {
     let live = true
@@ -189,19 +203,25 @@ function AgentDetailPane({ member, tpls, onRemoved, onClose }: {
   return (
     <div data-agent-detail className="max-w-[560px]">
       <DetailHead
-        lead={<Avatar agentId={member.id} name={member.role} size={40} src={avatars[member.id]} />}
+        lead={<>
+          <Avatar agentId={member.id} name={member.role} size={40} src={roleUrl ?? undefined}
+            onChangeImage={roleFile.open} changeImageLabel={t('avatar.changeRole')} />
+          {roleFile.input}
+        </>}
         title={member.role}
         sub={templateOrigin(member.role, def, tpls, t) ?? slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}
-        actions={
+        actions={<>
+          <RestoreAvatarButton shown={!!roleUrl}
+            onRestore={async () => { await api.clearRoleAvatar(member.role); setRoleUrl(null); await invalidate('team') }} />
           <Button size="sm" data-agent-sleep onClick={() => void toggleSleep()}>
             <Icon name={sleeping ? 'bolt' : 'sleep'} size={14} />{sleeping ? t('agent.wake') : t('agent.sleep')}
           </Button>
-        }
+        </>}
       />
       <div className="mt-4">
         <RoleEditor key={member.id} agentId={member.id} density="md" onClose={onClose}
           footStart={
-            <Button size="sm" variant="ghost" className="text-red" data-agent-remove onClick={remove}>
+            <Button size="sm" variant="ghost" className="text-red-ink" data-agent-remove onClick={remove}>
               {t('teamTpl.remove')}
             </Button>
           } />

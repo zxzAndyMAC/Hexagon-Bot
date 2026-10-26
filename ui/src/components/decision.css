@@ -9,7 +9,11 @@
   box-shadow: var(--shadow-overlay); display: flex; flex-direction: column; position: relative;
   /* 补设计：坞不挤掉时间线——最高 55% 主区，正文卡内滚动（与 C12 钉顶卡同口径） */
   max-height: 55vh; }
-.dock .dock-card { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.dock .dock-card { display: flex; flex-direction: column; min-height: 0; flex: 1;
+  /* 修复即文档（owner-followups-1015 #26，2026-10-20 负责人截图）：卡曾经没有圆角，危险态红内环画在直角盒上，
+     四角从坞的 16 圆角外戳出来、与坞环线错开像留了缝。继承外壳圆角 = 同一常量、红环贴合坞边；
+     不改用 `.dock { overflow: hidden }` 裁切——那会把焦点环与正文滚动条一起裁掉。 */
+  border-radius: inherit; }
 .dock .dock-card > .dock-b { overflow-y: auto; min-height: 0; flex: 1; }
 
 /* ---- 头 ---- */
@@ -59,7 +63,7 @@
 .dock-check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
 
 /* ---- 错误：底栏上方红字（D6 / D8 错误态） ---- */
-.dock-err { padding: 0 16px 8px 54px; font-size: 12.5px; color: var(--red); }
+.dock-err { padding: 0 16px 8px 54px; font-size: 12.5px; color: var(--red-ink); }
 .dc .dock-err { padding-left: 16px; }
 
 /* ---- 底 ---- */
@@ -68,12 +72,19 @@
 
 /* ---- D8 独立形 dc（归来摘要、练习场、测试里单独渲染的卡） ---- */
 .dc { border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-raised); overflow: hidden; }
-.dc[data-danger], .dock-card[data-danger] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent); }
+/* 危险态（不可逆：推送、清理工作树）环线画在卡本身：坞内是内环（坞的 overlay 环线与投影留在外壳上），
+   独立形是外环替换 raised 环线（`dc` 自身 overflow:hidden 不裁 box-shadow）。两者都跟各自圆角走。 */
+.dock-card[data-danger] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent); }
 .dc[data-danger] { box-shadow: 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent), var(--shadow-md); }
 .dc + .dc { margin-top: 12px; }
 
 /* ---- 收起态：输入条上沿一枚胶囊行（圆角 12，overlay；橙点 + 「N 件待决 · 最严重：…」+ ▴） ---- */
-.dock-pill-row { display: flex; justify-content: center; margin: 0 auto 10px; max-width: 720px; width: 100%; }
+.dock-pill-row { display: flex; justify-content: center; margin: 0 auto 10px; max-width: 720px; width: 100%;
+  /* 修复即文档（owner-followups-1015 #01，2026-10-15 负责人截图）：胶囊行曾经不是定位元素，紧贴其上的时间线 `.tl`
+     是 relative + 铺底色，定位层画在流内容之上，把胶囊橙环与投影向上外扩的那几像素盖掉，看着像上沿被裁。
+     与展开态 `.dock` 同样进定位层（树序在 .tl 之后，z-index 仍 auto）。被否决：加 margin-top 让出空隙——
+     会改输入条上方的竖向节奏（D6 下距 10），且下一处贴边的定位邻居还会再盖一次。 */
+  position: relative; }
 .dock-pill { box-shadow: 0 0 0 1px color-mix(in oklch, var(--orange) 40%, transparent), var(--shadow-sm); }
 
 /* ---- 卡内旧子组件换皮（只在坞 / dc 作用域） ---- */
@@ -100,7 +111,7 @@
 .dock-split { display: inline-flex; }
 .dock-split[data-split] > [data-variant='primary']:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 8px; }
 .dock-caret { display: inline-grid; place-items: center; height: 28px; padding: 0 8px 0 6px; margin-left: 1px; border: 0;
-  border-radius: 0 99px 99px 0; background: var(--accent); color: white; cursor: pointer; }
+  border-radius: 0 99px 99px 0; background: var(--accent-strong); color: white; cursor: pointer; }
 .dock-caret:hover { opacity: .92; }
 .dock-caret:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .dock-caret:disabled { opacity: .45; cursor: default; }

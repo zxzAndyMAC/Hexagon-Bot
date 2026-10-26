@@ -20,7 +20,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { Composer } from './components/Composer'
 import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
-import { CommandPalette } from './components/CommandPalette'
+import { CommandPalette, type PaletteScope } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
@@ -30,8 +30,12 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
+import { closeOtherTabs, closeTabsToRight, copyTabPath, tabPath, stepTab } from './tabActions'
+import { copyProjectPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
+import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
-import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
+import { dispatchMessageAction, messageTarget } from './messageActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from './memberActions'
 
 
 export default function App() {
@@ -43,6 +47,8 @@ export default function App() {
   useEffect(() => { settingsOpenRef.current = settingsOpen }, [settingsOpen])
   const [computerSettings, setComputerSettings] = useState<Section>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // #31：openWith 键位打开的是面板的「打开方式」视图；⌘K 打开全量视图。
+  const [paletteScope, setPaletteScope] = useState<PaletteScope>('all')
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
   // ADR 0088 / 0090（票 03）：主区视图三态——对话 / 画布全宽 / 用量详情；后两种时对话与输入条一起让出主区。
   const view = useUiStore(mainView)
@@ -75,7 +81,8 @@ export default function App() {
       if (projectOpen !== true) return
       const section = (event as CustomEvent<unknown>).detail
       // review R2：托管报告行内动作还会指到 MCP / 技能分区（core managed/next.rs 的封闭表）。
-      if (section !== 'models' && section !== 'usage' && section !== 'mcp' && section !== 'skills') return
+      // owner-followups-1015 #15：发布卡 / ⌘K「发布…」写因 / 托管报告「配置发布目标」→ 设置·发布。
+      if (section !== 'models' && section !== 'usage' && section !== 'mcp' && section !== 'skills' && section !== 'release') return
       void enterSettings(section)
     }
     // Ticket 05: a report entry asked for its timeline row; the timeline jumps.
@@ -227,6 +234,7 @@ export default function App() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (matches(e, bindingFor('commandPalette'))) {
         e.preventDefault()
+        setPaletteScope('all')
         setPaletteOpen((v) => !v)
         return
       }
@@ -287,6 +295,72 @@ export default function App() {
         if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) s.closeTab(s.activeTab)
         return
       }
+      // owner-followups-1015 #08（A16b 成员行 / 消息）：默认空绑定。消息动作作用于焦点（或选区）所在的消息，
+      // 成员动作作用于焦点成员行；没有目标就只吞掉这次按键（已被负责人绑给这个动作）。
+      for (const [action, verb] of [['copyMessage', 'copy'], ['quoteMessage', 'quote'], ['locateInRail', 'locate']] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const host = useUiStore.getState().modalScope === 'workbench' ? messageTarget() : null
+        if (host) dispatchMessageAction(host, verb)
+        return
+      }
+      for (const [action, run] of [['openMemberDetail', openMemberDetail], ['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
+        ['changeMemberAvatar', changeMemberAvatar], ['restoreMemberAvatar', restoreMemberAvatar]] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const id = useUiStore.getState().modalScope === 'workbench' ? memberRowTarget() : null
+        if (id) void run(id)
+        return
+      }
+      // owner-followups-1015 #05（A16b）：右键菜单动作的键位入口，默认空绑定（matches 对空串恒假）；同 ⌘W 只在画布可见时作用于当前页签。
+      // owner-followups-1015 #06（A22「溢出」）：⌘⇧] / ⌘⇧[ 按可见顺序切页签；同 ⌘W 只在画布可见时作用。
+      for (const [action, dir] of [['nextTab', 1], ['prevTab', -1]] as const) {
+        if (!matches(e, bindingFor(action))) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView) stepTab(dir)
+        return
+      }
+      for (const [action, run] of [['closeOtherTabs', closeOtherTabs], ['closeTabsToRight', closeTabsToRight]] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) void run(s.activeTab)
+        return
+      }
+      // owner-followups-1015 #07（A16b 文件树行）：路径动作（复制 / 插入到输入条 / 在访达中显示）的键位入口，
+      // 默认空绑定；作用对象 = 焦点文件树行，否则画布可见时的当前文件 / 产物页签（#05 的 copyPath 同此扩展）。
+      // owner-followups-1015 #31（A16b「打开方式」）：默认空绑定；打开命令面板的「打开方式」视图，
+      // 面板按打开前的焦点（文件树行）或当前文件 / 产物页签列编辑器，另列整个项目。
+      if (matches(e, bindingFor('openWith')) && bindingFor('openWith')) {
+        e.preventDefault()
+        if (useUiStore.getState().modalScope !== 'workbench') return
+        setPaletteScope('openWith')
+        setPaletteOpen(true)
+        return
+      }
+      for (const action of ['copyPath', 'insertPath', 'revealPath'] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope !== 'workbench') return
+        const tab = s.canvasOpen && !s.usageView ? tabPath(s.tabs.find((x) => x.id === s.activeTab)) : null
+        const row = treeRowTarget()
+        const target = row ?? (tab ? { path: tab, kind: 'file' as const } : null)
+        if (!target) return
+        // 页签与文件树行都写绝对路径（票 29 页签、#30 文件树行；2026-10-20 负责人裁决两处统一）
+        if (action === 'copyPath') void (row ? copyProjectPath(row.path) : copyTabPath(s.activeTab!))
+        else if (action === 'revealPath') void revealPath(target.path)
+        else {
+          const path = treeInsertPath(target)
+          if (path) insertPathToComposer(path)
+        }
+        return
+      }
       // ADR 0069：退回/跳过/盖章不再有快捷键。最终验收留在待决卡。
       if (useUiStore.getState().modalScope === 'workbench') {
         // 票 12：mod+J 聚焦节点轨（键盘可达性入口）
@@ -341,14 +415,14 @@ export default function App() {
               setSettingsOpen(false)
             }}
           />
-          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+          {paletteOpen && <CommandPalette scope={paletteScope} onClose={() => setPaletteOpen(false)} />}
         </div>
       )}
     <div aria-hidden={settingsOpen || undefined} data-workbench data-main-view={view} data-focus-mode={focusMode || undefined}
       style={{ height: '100%', display: settingsOpen ? 'none' : 'flex' }}>
       {!settingsOpen && shell.side !== 'hidden' && (
         <>
-          <Sidebar onSearch={() => setPaletteOpen(true)} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)}
+          <Sidebar onSearch={() => { setPaletteScope('all'); setPaletteOpen(true) }} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)}
             forceCollapsed={shell.sideForced} />
           <SidebarHandle forced={shell.sideForced} />
         </>
@@ -366,8 +440,8 @@ export default function App() {
             <SwitchWaitBanner />
             {/* 票 07：对话列宽只由 --col-w 决定（时间线 .tl-col、恢复条、触顶横幅、输入条同读），主区不再加左右内距 */}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方；与时间线同列对齐（列宽规则在 timeline.css） */}
-              <SessionRecoveryStrip />
+              {/* owner-followups-1015 #11（C12a「改为头部胶囊」）：会话卡不再钉在这里——常驻时把归来摘要压到约 170px、
+                  「需要你处理」被裁；现在异常时收成头部 / 画布页签栏状态槽里的「会话」胶囊（SessionPill）。 */}
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Timeline />
               </div>
@@ -389,7 +463,7 @@ export default function App() {
         </div>
       </div>
       {!settingsOpen && <FlowDialog />}
-      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
+      {!settingsOpen && paletteOpen && <CommandPalette scope={paletteScope} onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
     </div>
     </TooltipProvider>
   )

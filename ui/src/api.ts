@@ -1,9 +1,12 @@
 import type { ReconcileReport } from './gen/ReconcileReport'
+import type { OpenWithApp } from './gen/OpenWithApp'
+import type { ArtistProposal } from './gen/ArtistProposal'
 import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
 import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
+import { artifactRegisteredPath } from './artifactLayout'
 import { useUiStore } from './store'
 import type { ProjectTurnDelta } from './gen/ProjectTurnDelta'
 import type { ProjectToolOutputDelta } from './gen/ProjectToolOutputDelta'
@@ -89,7 +92,12 @@ import type { CheckOutcome } from './gen/CheckOutcome'
 import type { OverrideOutcome } from './gen/OverrideOutcome'
 import type { InstallOutcome } from './gen/InstallOutcome'
 import type { GrantOutcome } from './gen/GrantOutcome'
-import type { PublishOutcome } from './gen/PublishOutcome'
+import type { PushOutcome } from './gen/PushOutcome'
+import type { PushRequest } from './gen/PushRequest'
+import type { PushTargets } from './gen/PushTargets'
+import type { ReleaseTarget } from './gen/ReleaseTarget'
+import type { ReleaseOutcome } from './gen/ReleaseOutcome'
+import type { ReleaseTargetDraft } from './gen/ReleaseTargetDraft'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
 import type { ReturnSummary } from './gen/ReturnSummary'
@@ -149,7 +157,7 @@ export type PackStage = StageDef
 export type {
   StageEvidence, CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
   UsageTotal, UsageRow, UsageSummary, UsageBucket, ContextPressure, StageAction, OpenStageOutcome,
-  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
+  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PushOutcome, PushRequest, PushTargets,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
@@ -161,6 +169,7 @@ export type {
   SessionSummary, CapabilityStatus,
   OneTimeTrigger,
   WorktreeAttachment, WorktreeOperation, WorktreeRequest, SessionRecord,
+  ReleaseTarget, ReleaseTargetDraft, ReleaseOutcome,
 }
 
 
@@ -383,6 +392,16 @@ export const api = {
   writeRepoFile: (snapshot: RepoFileSnapshot, content: string) => call<void>('write_repo_file', { snapshot, content }),
   createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
+  /** owner-followups-1015 #07：在访达 / 资源管理器 / 文件管理器中显示（控制组；根约束在 core，越界 errors.reveal_outside_project）。 */
+  revealRepoPath: (path: string) => call<void>('reveal_repo_path', { path }),
+  /** owner-followups-1015 #31「打开方式」：本机可打开该路径的 IDE / 编辑器（白名单 ∩ 系统登记；空串 = 项目根）。 */
+  openWithCandidates: (path: string) => call<OpenWithApp[]>('open_with_candidates', { path }),
+  /** 用指定应用打开（控制组）；core 重判根约束 + 白名单，越界 errors.open_with_outside_project。 */
+  openWith: (path: string, appId: string) => call<void>('open_with', { path, appId }),
+  /** #32：启动页最近项目的「打开方式」候选（项目级、目录口径；`dir` 必须是 recents 记录里的一条，core 判）。 */
+  recentOpenWithCandidates: (dir: string) => call<OpenWithApp[]>('recent_open_with_candidates', { dir }),
+  /** #32：用指定应用打开最近项目（控制组；core 先认 recents 记录，再重算候选）。 */
+  recentOpenWith: (dir: string, appId: string) => call<void>('recent_open_with', { dir, appId }),
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
   approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
   setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
@@ -544,9 +563,28 @@ export const api = {
     call<void>('reject_proposal', { qid, reason }),
   rollbackProposal: (proposalId: string) =>
     call<void>('rollback_proposal', { proposalId }),
-  requestPublish: (remote: string) => call<string>('request_publish', { remote }),
-  confirmPublish: (qid: string) => call<PublishOutcome>('confirm_publish', { qid }),
-  rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
+  // owner-followups-1015 #13：已「允许本项目」同一（远程, 基线分支）时宿主当场推送，pushed 为回执。
+  requestPush: (remote: string) => call<PushRequest>('request_push', { remote }),
+  /** remember = 推送卡上的「允许本项目」（记 远程 + 分支）。 */
+  confirmPush: (qid: string, remember = false) => call<PushOutcome>('confirm_push', { qid, remember }),
+  /** ⌘K「推送」目标：基线上游远程；无上游时由负责人在 remotes 里选。 */
+  pushTargets: () => call<PushTargets>('push_targets'),
+  rejectPush: (qid: string) => call<void>('reject_push', { qid }),
+  // 发布目标（owner-followups-1015 #14）：设置·发布页；凭据明文只经 setReleaseCredential 进钥匙串，读面只回「已存入」。
+  releaseTargets: () => call<ReleaseTarget[]>('release_targets'),
+  saveReleaseTarget: (draft: ReleaseTargetDraft) => call<ReleaseTarget>('save_release_target', { draft }),
+  removeReleaseTarget: (id: string) => call<void>('remove_release_target', { id }),
+  setReleaseCredential: (id: string, credential: string, secret: string) =>
+    call<ReleaseTarget>('set_release_credential', { id, credential, secret }),
+  removeReleaseCredential: (id: string, credential: string) =>
+    call<ReleaseTarget>('remove_release_credential', { id, credential }),
+  // 发布执行（owner-followups-1015 #15）：发起只入队发布确认卡（必问、永不记忆）；确认后宿主跑登记的命令。
+  requestRelease: (targetId: string) => call<string>('request_release', { targetId }),
+  confirmRelease: (qid: string) => call<ReleaseOutcome>('confirm_release', { qid }),
+  rejectRelease: (qid: string) => call<void>('reject_release', { qid }),
+  // 登记发布目标卡（owner-followups-1015 #16）：Agent 在聊天里拟的目标，负责人批准才写入登记表。
+  approveReleaseTargetCard: (qid: string) => call<ReleaseTarget>('approve_release_target_card', { qid }),
+  rejectReleaseTargetCard: (qid: string) => call<void>('reject_release_target_card', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -594,10 +632,20 @@ export const api = {
       agentId: args.agentId ?? null,
       kinds: args.kinds ?? null,
     }),
-  // ---- 头像 ----
+  // ---- 头像（票 17：角色层 + 实例覆盖；读 agentAvatar 得生效图）----
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
+  clearAgentAvatar: (agentId: string) => call<void>('clear_agent_avatar', { agentId }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
+  roleAvatar: (role: string) => call<string | null>('role_avatar', { role }),
+  setRoleAvatar: (role: string, dataUrl: string) => call<void>('set_role_avatar', { role, dataUrl }),
+  clearRoleAvatar: (role: string) => call<void>('clear_role_avatar', { role }),
+  // ---- 画师头像提案（票 20；不是待决卡，不走裁决回路）----
+  artistProposal: (id: string) => call<ArtistProposal>('artist_proposal', { id }),
+  artistRegenerate: (id: string, role: string) => call<ArtistProposal>('artist_regenerate', { id, role }),
+  artistApply: (id: string, roles: string[]) => call<ArtistProposal>('artist_apply', { id, roles }),
+  /** ticket 33 P3：跳过 / 取消跳过落盘，重载后照旧。 */
+  artistSkip: (id: string, role: string, skipped: boolean) => call<ArtistProposal>('artist_skip', { id, role, skipped }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -639,6 +687,9 @@ export const api = {
     call<KeyProbe>('probe_provider_key', { provider, secret: secret || null, model }),
   // gap B8：内置服务商预设（向导服务商下拉；静态表，读组）
   providerPresets: () => call<ProviderPreset[]>('provider_presets'),
+  /** 票 21：表单「实际请求地址」预览（core provider_url，与保存同一道规范化）；null = 不预览。 */
+  providerRequestUrl: (kind: ProviderView['kind'], baseUrl: string) =>
+    call<string | null>('provider_request_url', { kind, baseUrl }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
@@ -681,6 +732,8 @@ export const api = {
       initGit: boolean
       agentsMd?: string | null
       autonomy?: string | null
+      /// 票 17：向导角色详情换的头像（data URL），建项目时按角色写入。
+      roleAvatars?: { role: string; data_url: string }[]
     },
     onStep?: (step: CreateStep) => void,
   ) => {
@@ -696,6 +749,7 @@ export const api = {
         initGit: opts.initGit,
         agentsMd: opts.agentsMd ?? null,
         autonomy: opts.autonomy ?? null,
+        roleAvatars: opts.roleAvatars ?? null,
       },
     }
     if (!isTauri) {
@@ -732,6 +786,11 @@ const MOCK_SESSION_SUMMARY: SessionSummary = {
 
 // 票 16c：`?mocksession` 让 SessionHost 黄金路径在浏览器 dev 里可走——暂停→继续、
 // 请求工作树→坞内工作树确认卡→确认后挂上、稍后继续预约。不带标志时保持静态样例（vitest 依赖）。
+// #22：dev 夹具的预设补齐 core ProviderPreset 的说明性字段（手工条目默认无图标 / 无示例）。
+const mockPreset = (p: Partial<ProviderPreset> & Pick<ProviderPreset, 'id' | 'name' | 'kind' | 'base_url'>): ProviderPreset => ({
+  default_model: '', icon_key: '', website: '', docs: '', sample_models: [], origin: 'manual', ...p,
+})
+
 const mockSessionOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksession')
 const MOCK_SESSION = {
   status: 'running' as SessionRecord['status'], reason: 'session_started',
@@ -743,6 +802,21 @@ const mockSessionSummary = (): SessionSummary => ({
   ...MOCK_SESSION_SUMMARY,
   session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
   triggers: MOCK_SESSION.triggers,
+})
+// owner-followups-1015 #11（C12a「改为头部胶囊」）：`?mocksessionalert` = 会话失败 + 同 kind 多项能力（MCP 3/6），
+// 截图用例「会话异常 + 坞展开」用它确认胶囊出在头部、归来摘要「需要你处理」不再被常驻会话卡挤裁。
+const mockSessionAlertOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksessionalert')
+const mockMcp = (id: string, health: SessionSummary['capabilities'][number]['health'], last_error: string | null = null) => (
+  { kind: 'mcp' as const, id, available: true, granted: false, health, last_error, requires_user_action: health === 'unavailable', binding_hint: 'project:/mock/project' })
+const mockSessionAlertSummary = (): SessionSummary => ({
+  ...MOCK_SESSION_SUMMARY,
+  session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: 'failed', last_reason_code: 'turn_failed' },
+  capabilities: [
+    ...MOCK_SESSION_SUMMARY.capabilities.filter((c) => c.kind !== 'mcp'),
+    mockMcp('docs', 'unavailable', 'mcp_worker_exited'), mockMcp('git', 'healthy'), mockMcp('fs', 'degraded', 'mcp_slow_start'),
+    mockMcp('search', 'healthy'), mockMcp('db', 'reconnecting'), mockMcp('figma', 'healthy'),
+  ],
+  next_action: 'inspect_failure',
 })
 const mockWorktreeCard = () => MOCK_SESSION.card
   ? [{ id: MOCK_SESSION.card.id, kind: 'worktree', agent_id: null, payload: { operation: 'create', path: MOCK_SESSION.card.path, baseline: 'main', baseline_commit: '3a7bca5e9f01', session_id: 'session-mock' }, state: 'queued' }]
@@ -776,6 +850,33 @@ const mockAvatars: Record<string, string> = {
     '<path d="M14 58c3-11 10-16 18-16s15 5 18 16z" fill="#e8a33d"/>' +
     '</svg>',
   )}`,
+}
+
+/// 票 17：角色层 mock（按角色名），生效图 = 实例覆盖 > 角色图。
+const mockRoleAvatars: Record<string, string> = {}
+const mockEffective = (id: string, role?: string): string | undefined =>
+  mockAvatars[id] ?? (role ? mockRoleAvatars[role] : undefined)
+// 票 20 dev mock：画师头像提案。图是本地拼的 SVG 色块（不出网），第二格模拟一次出图失败。
+const mockArtistProposals: Record<string, ArtistProposal> = {}
+const mockArtistImage = (role: string, rev: number) => {
+  const hue = ([...role].reduce((h, c) => h + c.charCodeAt(0), 0) * 37 + rev * 90) % 360
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="hsl(${hue} 60% 70%)"/><rect x="2" y="2" width="4" height="4" fill="hsl(${hue} 60% 35%)"/></svg>`
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
+const mockArtistProposal = (id: string): ArtistProposal => {
+  if (!mockArtistProposals[id]) {
+    const roles = (mock('team') as { role: string }[]).map((r) => r.role)
+    mockArtistProposals[id] = {
+      id, style: 'pixel art', model: 'gpt-image-1', applied: [], skipped: [],
+      items: roles.map((role, i) => ({
+        role,
+        prompt: `pixel art. A square avatar portrait representing the team role "${role}". One centered subject, simple background, no text, no letters, no watermark.`,
+        image: i === 1 ? null : mockArtistImage(role, 0),
+        failure: i === 1 ? 'provider_unavailable' : null,
+      })),
+    }
+  }
+  return mockArtistProposals[id]
 }
 
 const T0 = '2026-09-18T'
@@ -1014,7 +1115,9 @@ const artLatest = (path: string): string | null => {
 const MOCK_DECIDED = new Set<string>()
 const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> = {
   answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
-  confirm_publish: (a) => String(a.qid), reject_publish: (a) => String(a.qid),
+  confirm_push: (a) => String(a.qid), reject_push: (a) => String(a.qid),
+  confirm_release: (a) => String(a.qid), reject_release: (a) => String(a.qid),
+  approve_release_target_card: (a) => String(a.qid), reject_release_target_card: (a) => String(a.qid),
   confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
   adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
   stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
@@ -1024,7 +1127,7 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
 const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
 let MOCK_MANAGED = { enabled: true, paused: false }
 const MOCK_MANAGED_HISTORY = [
-  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', next: { kind: 'timeline', target: '124' } },
+  { event_id: 124, card_id: 'q-m3', card_kind: 'push', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_pushed', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', next: { kind: 'timeline', target: '124' } },
   { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'evidence_complete', via: 'host', outcome: 'stamped', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'real_check', next: { kind: 'timeline', target: '123' } },
   { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '122' } },
 ]
@@ -1051,6 +1154,21 @@ const MOCK_DESIGN_OPTIONS = [
   { id: 'night', title: '夜间专注', description: '深色优先 · 紫色强调', layout: '单栏', typography: 'Inter', palette: '深色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm2', data_url: mockSvg('#2a2a33', '#15151b') }] },
   { id: 'warm', title: '温暖手账', description: '衬线标题 · 米色纸感', layout: '卡片', typography: '衬线', palette: '米色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm3', data_url: mockSvg('#fdf0dc', '#f8d6b8') }] },
 ]
+
+let MOCK_RELEASE: ReleaseTarget[] = [
+  { id: 'rel-npm', name: 'npm', command: 'npm publish --access public', cwd: 'packages/web', credentials: [{ name: 'NPM_TOKEN', set: true }, { name: 'NPM_OTP_SEED', set: false }] },
+  { id: 'rel-pages', name: 'GitHub Pages', command: 'npm run deploy', cwd: '', credentials: [] },
+]
+function mockSaveRelease(draft: ReleaseTargetDraft): ReleaseTarget {
+  const prev = MOCK_RELEASE.find((r) => r.id === draft.id)
+  const names = [...new Set(draft.credentials.map((c) => c.trim()).filter(Boolean))]
+  const next: ReleaseTarget = {
+    id: prev?.id ?? `rel-${Date.now()}`, name: draft.name.trim(), command: draft.command.trim(), cwd: draft.cwd.trim(),
+    credentials: names.map((name) => ({ name, set: prev?.credentials.find((c) => c.name === name)?.set ?? false })),
+  }
+  MOCK_RELEASE = prev ? MOCK_RELEASE.map((r) => (r.id === prev.id ? next : r)) : [...MOCK_RELEASE, next]
+  return next
+}
 
 function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
@@ -1102,7 +1220,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops', duty: '部署与发布' },
       ].map((r) => ({
         ...r,
-        avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
+        avatar_hash: mockEffective(r.id, r.role) ? mockHash(`${!!mockAvatars[r.id]}:${mockEffective(r.id, r.role)}`) : null,
+        avatar_override: !!mockAvatars[r.id],
         // gap B2：团队行带解析后的模型展示名（dev 样例对照 workbench#running 消息头）
         model: ({ chat: 'Claude Sonnet 5.5', code: 'Claude Sonnet 5.5', ops: 'DeepSeek V4' } as Record<string, string>)[r.model_slot] ?? null,
         superior: ({ 后端: '后端技术负责人', 前端: '架构师', UX: '产品策划', QA: '架构师' } as Record<string, string>)[r.role] ?? null,
@@ -1237,13 +1356,13 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(89, 'stage_skipped', null, 'r4', { stage: '灰度' }, '11:00'),
         mkEv(90, 'stage_rewound', null, 'r3', { stage: '实现', to_seq: 2 }, '11:02'),
         mkEv(91, 'autonomy_changed', null, null, { from: 'L0', to: 'L1' }, '11:05'),
-        mkEv(92, 'publish_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:08'),
-        mkEv(93, 'publish_failed', null, null, { remote: 'origin', error: '网络超时' }, '11:09'),
-        mkEv(94, 'publish_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:15'),
-        mkEv(95, 'publish_confirmed', null, null, { remote: 'origin', baseline: 'main' }, '11:16'),
+        mkEv(92, 'push_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:08'),
+        mkEv(93, 'push_failed', null, null, { remote: 'origin', error: '网络超时' }, '11:09'),
+        mkEv(94, 'push_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:15'),
+        mkEv(95, 'push_confirmed', null, null, { remote: 'origin', baseline: 'main' }, '11:16'),
         mkEv(96, 'baseline_merged', null, null, { baseline: 'main', commit: 'c4f9a2e' }, '11:17'),
-        mkEv(97, 'publish_requested', null, null, { remote: 'upstream', baseline: 'main' }, '11:20'),
-        mkEv(98, 'publish_rejected', null, null, { remote: 'upstream', by: 'owner' }, '11:21'),
+        mkEv(97, 'push_requested', null, null, { remote: 'upstream', baseline: 'main' }, '11:20'),
+        mkEv(98, 'push_rejected', null, null, { remote: 'upstream', by: 'owner' }, '11:21'),
         mkEv(99, 'usage_cap_hit', null, null, { spent_mc: 40200, limit_cents: 20000 }, '11:25'),
         mkEv(100, 'team_slept', null, null, {}, '11:25'),
         mkEv(101, 'agent_slept', 'a3', null, {}, '11:25'),
@@ -1288,7 +1407,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false, change: 'on', approval_mode: 'assisted' }, '11:57'),
         mkEv(122, 'system', 'a4', null, { kind: 'managed_decision', card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: '端到端测试需要浏览器内核，下载落在项目缓存目录，属本项目联网委托。', via: 'model', outcome: 'allowed', actor: 'managed:g1:1' }, '11:58'),
         mkEv(123, 'system', 'a3', null, { kind: 'managed_decision', card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: '与项目说明「单用户离线工具」一致；另两个方案偏装饰。', via: 'model', outcome: 'stamped', actor: 'managed:g1:1' }, '11:59'),
-        mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_published', actor: 'managed:g1:1' }, '12:00'),
+        mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'push', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_pushed', actor: 'managed:g1:1' }, '12:00'),
       )
       // 票 08 截图比对（feedback#model-recovery）：`?mockrecovery` 时追加 D11 ①②③⑥ 四种状态
       if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockrecovery')) {
@@ -1316,7 +1435,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
-        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-pub', kind: 'push', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
@@ -1422,13 +1541,52 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_agent_avatar':
       mockAvatars[String(args?.agentId)] = String(args?.dataUrl)
       return null as T
-    case 'agent_avatar':
-      return (mockAvatars[String(args?.agentId)] ?? null) as T
+    case 'clear_agent_avatar':
+      delete mockAvatars[String(args?.agentId)]
+      return null as T
+    case 'agent_avatar': {
+      const id = String(args?.agentId)
+      const role = (mock('team') as { id: string; role: string }[]).find((r) => r.id === id)?.role
+      return (mockEffective(id, role) ?? null) as T
+    }
+    case 'role_avatar':
+      return (mockRoleAvatars[String(args?.role)] ?? null) as T
+    case 'set_role_avatar':
+      mockRoleAvatars[String(args?.role)] = String(args?.dataUrl)
+      return null as T
+    case 'clear_role_avatar':
+      delete mockRoleAvatars[String(args?.role)]
+      return null as T
+    case 'artist_proposal':
+      return mockArtistProposal(String(args?.id)) as T
+    case 'artist_regenerate': {
+      const p = mockArtistProposal(String(args?.id))
+      mockArtistProposals[p.id] = { ...p, items: p.items.map((it) => it.role === String(args?.role)
+        ? { ...it, image: mockArtistImage(it.role, 1), failure: null } : it) }
+      return mockArtistProposals[p.id] as T
+    }
+    case 'artist_apply': {
+      const p = mockArtistProposal(String(args?.id))
+      const roles = (args?.roles as string[] | undefined) ?? []
+      for (const role of roles) {
+        const img = p.items.find((it) => it.role === role)?.image
+        if (img) mockRoleAvatars[role] = img
+      }
+      mockArtistProposals[p.id] = { ...p, applied: roles }
+      return mockArtistProposals[p.id] as T
+    }
+    case 'artist_skip': {
+      const p = mockArtistProposal(String(args?.id))
+      const role = String(args?.role)
+      const rest = p.skipped.filter((r) => r !== role)
+      mockArtistProposals[p.id] = { ...p, skipped: args?.skipped ? [...rest, role] : rest }
+      return mockArtistProposals[p.id] as T
+    }
     case 'artifact_content':
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
       return (ART_CONTENT[String(args?.path)]?.[Number(args?.version)] ?? null) as T
-    case 'session_summary': return (mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
+    case 'session_summary': return (mockSessionAlertOn() ? mockSessionAlertSummary() : mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
     case 'session_pause':
     case 'session_reconnect':
     case 'session_resume':
@@ -1439,15 +1597,18 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'reject_worktree':
     case 'session_verify_worktree':
       return null as T
+    case 'push_targets':
+      return { baseline: 'main', upstream: 'origin', remotes: ['origin'] } as T
+    case 'request_push':
+      return { question_id: 'q-pub', pushed: null } as T
     case 'set_agent_sleeping':
     case 'remove_agent':
     case 'review_proposal':
     case 'confirm_proposal':
     case 'reject_proposal':
     case 'rollback_proposal':
-    case 'request_publish':
-    case 'confirm_publish':
-    case 'reject_publish':
+    case 'confirm_push':
+    case 'reject_push':
     case 'reject_stamp':
     case 'adjudicate_flag':
     case 'allow_project_permission':
@@ -1490,6 +1651,25 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'mcp_services':
       return [] as T
+    // owner-followups-1015 #14：设置·发布页预览——两条目标，npm 的令牌已存、OTP 未设置（只回名字与「已存入」）。
+    case 'release_targets': return MOCK_RELEASE.map((r) => ({ ...r, credentials: r.credentials.map((c) => ({ ...c })) })) as T
+    case 'save_release_target': return mockSaveRelease(args?.draft as ReleaseTargetDraft) as T
+    case 'remove_release_target': MOCK_RELEASE = MOCK_RELEASE.filter((r) => r.id !== args?.id); return null as T
+    case 'set_release_credential':
+    case 'remove_release_credential': {
+      const target = MOCK_RELEASE.find((r) => r.id === args?.id)
+      const cred = target?.credentials.find((c) => c.name === args?.credential)
+      if (cred) cred.set = cmd === 'set_release_credential'
+      return target as T
+    }
+    case 'request_release': return 'q-rel' as T
+    case 'confirm_release': {
+      const target = MOCK_RELEASE.find((r) => r.id === 'rel-npm')
+      return { target_id: target?.id ?? '', name: target?.name ?? '', output: '', duration_ms: 0 } as T
+    }
+    case 'reject_release': return null as T
+    case 'approve_release_target_card': return (MOCK_RELEASE[0] ?? null) as T
+    case 'reject_release_target_card': return null as T
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },
@@ -1534,7 +1714,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       const p = String(args?.path)
       // .hexagon/ 下的产物磁盘版与 ART_CONTENT 最新版对齐，
       // 浏览器预览里「文件页 vs 版本基线」才有真实差异可看。
-      const artPath = p.startsWith('.hexagon/') ? p.slice('.hexagon/'.length) : null
+      const artPath = artifactRegisteredPath(p)
       const art = artPath ? artLatest(artPath) : null
       if (art != null) return art as T
       if (p.endsWith('.md')) {
@@ -1551,7 +1731,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'write_repo_file':
     case 'create_repo_file':
     case 'create_repo_dir':
+    case 'reveal_repo_path':
+    case 'open_with':
+    case 'recent_open_with':
       return null as T
+    // #31：mock 机器上装了两个编辑器，图标取不到（中性图标）。#32：非文本类（pdf / 图片……）给系统列表、默认在前。
+    case 'open_with_candidates':
+    case 'recent_open_with_candidates':
+      if (/\.(pdf|pptx?|key|docx?|xlsx?|png|jpe?g|gif|mp4|mov|mp3)$/i.test(String(args?.path ?? ''))) {
+        return [{ id: 'com.apple.Preview', name: 'Preview', icon: null, is_default: true },
+          { id: 'com.google.Chrome', name: 'Google Chrome', icon: null, is_default: false }] as T
+      }
+      return [{ id: 'com.microsoft.VSCode', name: 'Visual Studio Code', icon: null, is_default: false },
+        { id: 'dev.zed.Zed', name: 'Zed', icon: null, is_default: false }] as T
     case 'permission_shape_suggestion':
       return (args?.questionId === 'q-perm' ? { shape: 'exact:cargo test --workspace', generalized: false, tool: 'bash', project_id: 'p1', agent_id: 'a0' } : null) as T
     case 'approval_mode':
@@ -1774,23 +1966,36 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (String(args?.secret ?? '').includes('bad')
         ? { ok: false, failure: 'authentication', status: 401, model_listed: null, window: null }
         : { ok: true, failure: null, status: null, model_listed: true, window: 200000 }) as T
+    // 票 21：dev 夹具只粗略模仿 core provider_url（真规则与测试在 core）。
+    case 'provider_request_url': {
+      const base = String(args?.baseUrl ?? '').trim().replace(/\/+$/, '')
+      if (!base || base.includes('[stored:')) return null as T
+      const tail = args?.kind === 'anthropic' ? '/messages' : '/chat/completions'
+      if (base.endsWith(tail)) return base as T
+      const versioned = /\/v\d+[a-z0-9]*(\/|$)/i.test(base.replace(/^[a-z]+:\/\/[^/]*/i, ''))
+      return (args?.kind === 'jev' ? `${base}/v1/systemone` : versioned ? `${base}${tail}` : `${base}/v1${tail}`) as T
+    }
     case 'provider_presets':
       return [
-        { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
-        { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' },
-        { id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' },
-        { id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' },
-        { id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+        mockPreset({ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5', icon_key: 'anthropic' }),
+        mockPreset({ id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '', icon_key: 'openai' }),
+        mockPreset({ id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '', icon_key: 'deepseek' }),
+        mockPreset({ id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '', icon_key: 'moonshot' }),
+        mockPreset({ id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '', icon_key: 'openrouter' }),
         // gap B13：设置页目录并进同一份预设（core provider_presets.rs）
-        { id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '' },
-        { id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '' },
-        { id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '' },
-        { id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '' },
-        { id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '' },
-        { id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '' },
-        { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
-        { id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '' },
-        { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
+        mockPreset({ id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '', icon_key: 'google' }),
+        mockPreset({ id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '', icon_key: 'grok' }),
+        mockPreset({ id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '', icon_key: 'groq' }),
+        mockPreset({ id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '', icon_key: 'mistral' }),
+        mockPreset({ id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '', icon_key: 'silicon' }),
+        mockPreset({ id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '', icon_key: 'zhipu' }),
+        mockPreset({ id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '', icon_key: 'ollama' }),
+        mockPreset({ id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '', icon_key: 'lmstudio' }),
+        mockPreset({ id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' }),
+        // #22：目录条目（core provider_catalog；节选三条：无版本段完整端点 / 有版本段 / 无公共地址）
+        mockPreset({ id: 'perplexity', name: 'Perplexity', kind: 'openai', base_url: 'https://api.perplexity.ai/chat/completions', origin: 'catalog', icon_key: 'perplexity', website: 'https://perplexity.ai/', docs: 'https://docs.perplexity.ai/home' }),
+        mockPreset({ id: 'dashscope', name: 'Bailian', kind: 'openai', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', origin: 'catalog', icon_key: 'bailian', website: 'https://www.aliyun.com/product/bailian', docs: 'https://help.aliyun.com/zh/model-studio/getting-started/', sample_models: ['deepseek-r1', 'deepseek-v3', 'deepseek-v3.1'] }),
+        mockPreset({ id: 'gpustack', name: 'GPUStack', kind: 'openai', base_url: '', origin: 'catalog', icon_key: 'gpustack', website: 'https://gpustack.ai/', docs: 'https://docs.gpustack.ai/latest/' }),
       ] as T
     case 'fetch_provider_models':
       return [

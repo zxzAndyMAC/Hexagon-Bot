@@ -96,7 +96,8 @@ const INCOMPLETE_OUTCOMES: &[&str] = &[
     "checks_ran_still_incomplete",
     "kept_checks_required",
     "ended_unexecuted",
-    "not_published",
+    "not_pushed",
+    "not_released",
     "new_attempt_awaits_permission",
     "ended",
 ];
@@ -149,6 +150,10 @@ pub fn managed_history(
                 grant_kind: card
                     .as_ref()
                     .and_then(|c| c.payload["grant_kind"].as_str())
+                    .unwrap_or_default(),
+                release_target: card
+                    .as_ref()
+                    .and_then(|c| c.payload["target_id"].as_str())
                     .unwrap_or_default(),
             });
             ManagedRecord {
@@ -531,8 +536,8 @@ mod managed_proposal_tests;
 mod managed_install_tests;
 
 #[cfg(test)]
-#[path = "managed_publish_tests.rs"]
-mod managed_publish_tests;
+#[path = "managed_push_tests.rs"]
+mod managed_push_tests;
 
 #[cfg(test)]
 #[path = "managed_external_tests.rs"]
@@ -588,7 +593,7 @@ mod tests {
             "incomplete"
         );
         assert_eq!(result_of("incomplete", "incomplete"), "incomplete");
-        assert_eq!(result_of("publish", "failed: git"), "failed");
+        assert_eq!(result_of("push", "failed: git"), "failed");
     }
 
     #[test]
@@ -640,17 +645,34 @@ mod tests {
     }
 
     proptest! {
-        // Test3/22: publish iff every host fact holds.
+        // Test3/22: push iff every host fact holds.
         #[test]
-        fn publish_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 5)) {
-            let facts = PublishFacts {
+        fn push_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 5)) {
+            let facts = PushFacts {
                 target_configured: bits[0],
                 credential_present: bits[1],
                 delivery_accepted: bits[2],
                 baseline_unchanged: bits[3],
                 commit_unchanged: bits[4],
             };
-            prop_assert_eq!(publish_forced(&facts).0 == "publish", bits.iter().all(|b| *b));
+            prop_assert_eq!(push_forced(&facts).0 == "push", bits.iter().all(|b| *b));
+        }
+
+        // owner-followups-1015 #15 (D12): delegation releases iff every host fact
+        // holds; any refusal names a reason the report can route to Settings · Release.
+        #[test]
+        fn release_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 3)) {
+            let facts = ReleaseFacts {
+                target_registered: bits[0],
+                target_unchanged: bits[1],
+                credentials_present: bits[2],
+            };
+            let (action, reason) = release_forced(&facts);
+            prop_assert_eq!(action == "release", bits.iter().all(|b| *b));
+            if action != "release" {
+                prop_assert_eq!(action, "incomplete");
+                prop_assert!(["target_missing", "target_changed", "credential_missing"].contains(&reason));
+            }
         }
 
         // Test3/21: any non-empty secret slot (env or headers) means the host

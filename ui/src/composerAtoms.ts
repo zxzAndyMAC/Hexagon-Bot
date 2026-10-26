@@ -111,10 +111,14 @@ function oneRepoPath(path: string, kind: 'file' | 'dir'): string | null {
   return kind === 'dir' ? `${joined}/` : joined
 }
 
+/** 文件或目录 → 规范化的单条仓内路径（目录补尾 /）；链接 / 怪路径 → null。右键「插入到输入条」与拖入同形（#07）。 */
+export function treeInsertPath(entry: { path: string; kind: string }): string | null {
+  return entry.kind === 'file' || entry.kind === 'dir' ? oneRepoPath(entry.path, entry.kind) : null
+}
+
 /** 文件或目录 → 一条载荷。目录补尾 /，与 repo_paths 的目录形一致。链接返回 null。 */
 export function treeDragPayload(entry: { path: string; kind: string }): { payload: string; token: string } | null {
-  if (entry.kind !== 'file' && entry.kind !== 'dir') return null
-  const path = oneRepoPath(entry.path, entry.kind)
+  const path = treeInsertPath(entry)
   if (!path) return null
   return { payload: JSON.stringify({ path, kind: entry.kind }), token: pathTokenText(path) }
 }
@@ -142,6 +146,11 @@ export function pathFromTreeDrag(raw: string): string | null {
 export function insertPathToken(text: string, caret: number, path: string): { text: string; caret: number } | null {
   const token = pathTokenText(path)
   if (token === '#') return null
+  return insertToken(text, caret, token)
+}
+
+/** 在光标处插入一块（路径 / 点名），两侧补空白——路径块与成员行右键「@ 点名」（#08）共用。 */
+export function insertToken(text: string, caret: number, token: string): { text: string; caret: number } {
   const at = Math.max(0, Math.min(caret, text.length))
   const before = text.slice(0, at)
   const after = text.slice(at)
@@ -153,4 +162,9 @@ export function insertPathToken(text: string, caret: number, path: string): { te
 
 export function mentionTokenText(role: string): string {
   return `@${role.trim().replace(/^@+/, '')}`
+}
+
+/** 点名用名：花名册里同角色多于一个实例时写成 `角色[id]`，否则只写角色（输入条 @ 弹层与成员行「@ 点名」同口径）。 */
+export function mentionName(m: { id: string; role: string }, team: readonly { role: string }[]): string {
+  return team.filter((peer) => peer.role === m.role).length > 1 ? `${m.role}[${m.id}]` : m.role
 }

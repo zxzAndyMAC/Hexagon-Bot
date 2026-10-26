@@ -843,6 +843,11 @@ pub struct CreateProjectOpts {
     #[serde(default)]
     #[ts(optional)]
     pub pack: Option<PackDef>,
+    /// 向导角色详情里换的头像（票 17）。向导时项目还不存在，图留在界面内存，
+    /// 建项目时随单下发；壳层先 `avatars::prepare_role_avatars` 整单规整，建好后按角色写入。
+    #[serde(default)]
+    #[ts(optional)]
+    pub role_avatars: Option<Vec<crate::avatars::RoleAvatar>>,
     /// 已废弃。传了任何档，核都拒绝且不建项目（ADR 0069）。
     #[serde(default)]
     #[ts(optional)]

@@ -126,7 +126,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
         {reason && !connected && <p role="status" className="px-2.5 pt-1 text-[12px] text-ink-2" data-browser-blocked={block}>{reason}</p>}
         {extensionSetup && !connected && (
           <div className="mx-1 my-1.5 rounded-[var(--r-card)] bg-orange-tint p-3" data-browser-setup>
-            <div className="flex items-center gap-1.5 text-[13px] font-medium text-orange"><Icon name="warn" size={14} />{t('control.warnTitle')}</div>
+            <div className="flex items-center gap-1.5 text-[13px] font-medium text-orange-ink"><Icon name="warn" size={14} />{t('control.warnTitle')}</div>
             <p className="mt-1 text-[12px] text-ink-2">{t('browser.extensionAccess')}</p>
             <p className="mt-1 text-[12px] text-ink-3">{t('browser.extensionHint')}</p>
             <div className="mt-2 flex gap-1.5">
@@ -149,7 +149,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
               disabled={pending} onClick={() => void change()} />}
           </div>
         )}
-        {error && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red">{error}</p>}
+        {error && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red-ink">{error}</p>}
       </section>
     </TooltipProvider>
   )

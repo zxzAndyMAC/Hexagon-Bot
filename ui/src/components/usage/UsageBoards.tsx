@@ -13,7 +13,7 @@ import { ChartCard, HBar, UsageEmpty } from './parts'
 import { Avatar } from '@/components/ui/avatar'
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
-import { fmtTok, groupTokens, stageProgress } from '../../usage'
+import { fmtTok, groupTokens, stageProgress, usageActorName } from '../../usage'
 
 type Board = 'team' | 'model'
 
@@ -26,7 +26,7 @@ export function Leaderboard({ series, rows }: { series: UsageBucket[]; rows: Usa
   const [board, setBoard] = useState<Board>('team')
   const team = useUiStore((s) => s.team)
   const avatars = useUiStore((s) => s.avatars)
-  const roleOf = (id: string) => team.find((m) => m.id === id)?.role ?? id
+  const roleOf = (id: string) => usageActorName(team, id)
 
   const byAgent = groupTokens(series, (r) => r.agent_id ?? '—')
   const top = byAgent[0]?.[1] || 1

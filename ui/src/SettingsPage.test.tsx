@@ -236,7 +236,7 @@ describe('SettingsPage list|detail 分区', () => {
 
   it('Team（有项目）：选中 Agent 出 RoleEditor；从模板添加走 createRole', async () => {
     vi.spyOn(api, 'team').mockResolvedValue([
-      { id: 'a1', role: 'reviewer', model_slot: 'chat', status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+      { id: 'a1', role: 'reviewer', model_slot: 'chat', status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
     ])
     const detail = vi.spyOn(api, 'agentDetail').mockResolvedValue({
       agent_id: 'a1', role: 'reviewer', status: 'active', model_slot: 'chat', custom: false,
@@ -260,7 +260,7 @@ describe('SettingsPage list|detail 分区', () => {
     root.unmount()
   })
 
-  it('Skills：选中出详情；行内 switch 切启停', async () => {
+  it('Skills：选中出详情；详情头部 switch 切启停', async () => {
     vi.spyOn(api, 'listSkills').mockResolvedValue([
       { name: 'my-lint', description: '自建', origin: 'global', enabled: false },
     ])
@@ -270,7 +270,10 @@ describe('SettingsPage list|detail 分区', () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Skills')
     // 票 11：行内开关换成 A10 Switch（role=switch），不再是 input.switch
-    const sw = el.querySelector('[role="switch"]')!
+    // 行为变更（owner-followups-1015 #10，规范 E2「列表行不嵌开关」）：开关从列表行移到详情头部，先选中行再拿详情里的开关。
+    // （#10 合入时此处漏改，#30 补上。）
+    await act(async () => { el.querySelector<HTMLElement>('[role="option"][data-key="my-lint"]')!.click() })
+    const sw = el.querySelector('[data-skill-detail] [role="switch"]')!
     await act(async () => { sw.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(mute).toHaveBeenCalledWith('my-lint', true)
     root.unmount()

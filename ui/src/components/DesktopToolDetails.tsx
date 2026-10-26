@@ -6,7 +6,7 @@ import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
 import { Button } from '@/components/ui/button'
 import { ShortcutKbd } from '@/components/ui/kbd'
-import { ringPoints, sameImageSize, type RingFacts, type TargetRing } from '../computerTargetRing'
+import { ordinalCorner, ringPoints, sameImageSize, type OrdinalCorner, type RingFacts, type TargetRing } from '../computerTargetRing'
 
 // variant 'card'：电脑动作确认卡（components D8，control#action；ui-redesign gap D6）左栏 200 宽缩略，
 // 不带说明行（卡上 kv 已写应用 / 动作），放大仍走同一模态与同一受限读取 IPC。
@@ -90,7 +90,7 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ringFacts }: Pr
     setSizeOk(sameImageSize({ width: img.naturalWidth, height: img.naturalHeight }, result?.image_width, result?.image_height))
   const title = [t('computer.viewScreenshot'), formatBinding(bindingFor('viewDesktopScreenshot'))].filter(Boolean).join(' · ')
   return <div className={card ? 'desktop-tool-details' : 'desktop-tool-details mt-1'}>
-    {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
+    {output.requires_observation === true && <p role="status" className="text-[12px] text-orange-ink">{t('computer.needsObservation')}</p>}
     {name && <figure className={card ? 'm-0' : 'mt-1 flex items-center gap-2'}>
       <button ref={trigger} className={`desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] ${card ? 'relative w-full' : 'w-[120px]'} rounded-[var(--r-sm)] flex-none cursor-zoom-in place-items-center overflow-hidden bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45`}
         type="button" disabled={failed} aria-busy={busy}
@@ -99,24 +99,54 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ringFacts }: Pr
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
         {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover"
           onLoad={event => checkSize(event.currentTarget)} /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
-        {image && <TargetRings rings={thumbRings} />}
+        {image && <TargetRings rings={thumbRings} ordered={ringFacts?.op === 'drag'} />}
       </button>
       {!card && <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>}
     </figure>}
     {failed && <p role="status" className="mt-1 text-[12px] text-ink-3">{t('computer.screenshotUnavailable')}</p>}
-    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} rings={previewRings} onImage={checkSize} />}
+    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} rings={previewRings} ordered={ringFacts?.op === 'drag'} onImage={checkSize} />}
   </div>
 }
 
-/** 目标圈（components D8）：同一形制，drag 的起点 / 终点各一圈，`data-ring` 标角色。 */
-function TargetRings({ rings }: { rings: TargetRing[] | null }) {
-  return rings?.map(ring => <span key={ring.role} data-testid="computer-target-ring" data-ring={ring.role} aria-hidden="true"
-    className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-    style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }} />) ?? null
+/** drag 圈序号（components D8 followups 第 11 项）：起点「1」、终点「2」，不随语言，不走 i18n。 */
+const RING_ORDINAL: Record<TargetRing['role'], string> = { start: '1', end: '2' }
+
+/**
+ * 底衬在 22px 圈框内的定位：底衬 16px，圆心落在圈心沿 45° 外移 14px 处（距圈心 ≈19.8px，内缘 ≈11.8px，
+ * 只搭在 2px 实环外沿、不进圈内）。全是整像素：22/2 ± 14 − 16/2 = 17 / −11。
+ */
+const ORDINAL_POSITION: Record<OrdinalCorner, string> = {
+  'top-right': '-top-[11px] left-[17px]',
+  'top-left': '-top-[11px] -left-[11px]',
+  'bottom-right': 'top-[17px] left-[17px]',
+  'bottom-left': 'top-[17px] -left-[11px]',
 }
 
-function ScreenshotPreview({ image, label, onClose, rings, onImage }: {
-  image: string; label: string; onClose: () => void; rings: TargetRing[] | null; onImage: (img: HTMLImageElement) => void
+/**
+ * 目标圈（components D8）：同一形制，drag 的起点 / 终点各一圈，`data-ring` 标角色。
+ * owner-followups-1015 #04（2026-10-17 负责人裁决）：两枚圈曾长得一样，审批拖拽时分不清起终点、可能把方向看反；
+ * drag 的圈写「1」/「2」，缩略与放大模态同一组件所以一致。终点被缩略裁掉时只剩起点圈，仍写「1」。
+ * 仍不加连线（规范 D8：原型没有拖拽画法，方向由 kv「动作」调用式写明）；序号只是视觉，圈整组 aria-hidden
+ * （读屏读调用式）。click 一圈不写序号。
+ * owner-followups-1015 #30 第 1 项（2026-10-20 负责人裁决）：#04 的序号曾是圈心裸 11px `--red` 字，落在彩色 /
+ * 绿色控件上认不出（对比度随底下截图变）。改为圈外一角的实心底衬：`--red-strong` 底 + 白字 11/600
+ * （白 × red-strong 浅 5.2 / 深 5.0:1，与截图无关；`--red` 本体压白字不达标，见 foundations「对比度」）+
+ * 1px `--surface` 描边把底衬与同为红色的底分开。底衬朝截图中心（ordinalCorner），不遮圈内目标、贴边不被裁。
+ * 被否决：圈心实心底衬（盖住目标）；给字加描边 / 文字阴影（foundations 不立新阴影，彩色底上仍糊）。
+ */
+function TargetRings({ rings, ordered }: { rings: TargetRing[] | null; ordered: boolean }) {
+  return rings?.map(ring => <span key={ring.role} data-testid="computer-target-ring" data-ring={ring.role} aria-hidden="true"
+    className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+    style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }}>
+    {ordered && <span data-ring-ordinal data-corner={ordinalCorner(ring)}
+      className={`absolute grid size-4 place-items-center rounded-full border border-surface bg-red-strong text-[11px] font-semibold leading-none tabular-nums text-white ${ORDINAL_POSITION[ordinalCorner(ring)]}`}>
+      {RING_ORDINAL[ring.role]}
+    </span>}
+  </span>) ?? null
+}
+
+function ScreenshotPreview({ image, label, onClose, rings, ordered, onImage }: {
+  image: string; label: string; onClose: () => void; rings: TargetRing[] | null; ordered: boolean; onImage: (img: HTMLImageElement) => void
 }) {
   const { t } = useTranslation()
   const dialog = useRef<HTMLDialogElement>(null)
@@ -157,7 +187,7 @@ function ScreenshotPreview({ image, label, onClose, rings, onImage }: {
     <div className="relative mx-auto w-fit max-w-full">
       <img src={image} alt={label} decoding="async" onLoad={event => onImage(event.currentTarget)}
         className="block h-auto max-h-[calc(90vh-80px)] w-auto max-w-full rounded-[var(--r-sm)]" />
-      <TargetRings rings={rings} />
+      <TargetRings rings={rings} ordered={ordered} />
     </div>
   </dialog>
 }

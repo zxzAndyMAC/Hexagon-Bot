@@ -125,6 +125,7 @@ it('owner interruption displays a neutral stop while a provider failure remains 
     expect(el.textContent).not.toContain('Ok(Interrupted)')
     // ui-redesign 票 05（components C4「高风险系统行红字」）：旧 token --err 按 foundations §10 迁到 --red
     //（ADR 0088 换皮，语义不变：主动停止仍无色，提供方失败仍是红）。
-    expect(labels.find(label => label.textContent?.includes('HTTP 400'))?.style.color).toBe('var(--red)')
+    // owner-followups-1015 票 09：红字改吃文字档 --red-ink（基色 --red 在浅色卡面上只有 4.0:1），语义不变。
+    expect(labels.find(label => label.textContent?.includes('HTTP 400'))?.style.color).toBe('var(--red-ink)')
   } finally { await act(async () => root.unmount()) }
 })

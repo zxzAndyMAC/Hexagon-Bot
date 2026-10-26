@@ -132,6 +132,18 @@ export interface WorkTab {
   patchText?: string
 }
 
+/** 固定页签（components A22「溢出」，owner-followups-1015 #06）：侧栏「产物」「项目文件」对应的清单页签钉在页签栏最左，
+ * 不进横向滚动区。store 里也排在最前（openTab 插到固定组末尾），「关闭右侧」、上 / 下一个页签与看到的顺序一致。 */
+export const isPinnedTab = (t: Pick<WorkTab, 'kind'>) => t.kind === 'artifacts' || t.kind === 'files'
+
+/** 新页签插入位置：固定页签进固定组末尾，其余追加到最后。 */
+function withTab(tabs: WorkTab[], t: WorkTab): WorkTab[] {
+  if (tabs.some((x) => x.id === t.id)) return tabs
+  if (!isPinnedTab(t)) return [...tabs, t]
+  const at = tabs.filter(isPinnedTab).length
+  return [...tabs.slice(0, at), t, ...tabs.slice(at)]
+}
+
 /// 专注模式（⌘.，R-06）进入前的布局快照；只在内存，不跨重启。
 export interface FocusSnapshot { canvasOpen: boolean }
 
@@ -218,6 +230,9 @@ interface UiState extends ThemeSlice {
   activeTab: string | null
   modalScope: ModalScope
   flowDialogOpen: boolean
+  /// owner-followups-1015 #11（C12a）：「稍后继续…」时间弹层。入口在头部 ⋯ 菜单、⌘K 与会话胶囊弹层，
+  /// 弹层由会话胶囊宿主（SessionPill）挂一份——胶囊健康时不出现，入口不能跟着它消失。
+  sessionLaterOpen: boolean
   toasts: Toast[]
   confirmReq: ConfirmReq | null
   fileEdits: Record<string, FileEdit>
@@ -260,6 +275,7 @@ interface UiState extends ThemeSlice {
   /// ⌘.（`focusMode`）：只留对话与输入条，再按恢复进入前的布局。
   toggleFocusMode: () => void
   setFlowDialogOpen: (v: boolean) => void
+  setSessionLaterOpen: (v: boolean) => void
   requestAgentScreen: () => void
   openPendingDialog: () => void
   closePendingDialog: () => void
@@ -279,6 +295,8 @@ interface UiState extends ThemeSlice {
   requestTimelineStick: () => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
+  /** 一次关多个页签（A16b「关闭其他 / 关闭右侧」）；未保存的文件合并成一次离开确认。 */
+  closeTabs: (ids: string[]) => void
   setActiveTab: (id: string) => void
   setModalScope: (s: ModalScope) => void
   pushToast: (text: string, tone?: Toast['tone'], opts?: ToastOpts) => void
@@ -335,7 +353,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
       usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
       projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
-      tabs: [], activeTab: null, canvasOpen: false, usageView: false, flowDialogOpen: false,
+      tabs: [], activeTab: null, canvasOpen: false, usageView: false, flowDialogOpen: false, sessionLaterOpen: false,
       fileEdits: {}, fileTreeReq: null, confirmReq: null, intakeDraft: false, away: false,
       evidenceRevision: s.evidenceRevision + 1,
       timelineFacts: null, factsError: null, sessionSummary: null, sessionError: null, timeline: [], timelineCaughtUp: false,
@@ -386,6 +404,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   activeTab: null,
   modalScope: 'workbench',
   flowDialogOpen: false,
+  sessionLaterOpen: false,
   confirmReq: null,
   fileEdits: {},
   confirmFileEdits: async (ids) => {
@@ -463,21 +482,26 @@ export const useUiStore = create<UiState>((set, get) => ({
   // 票 03（ADR 0088）：打开页签 = 打开画布；用量详情占着主区时先回到对话（画布要和对话并排或全宽）。
   openTab: (t) =>
     set((s) => ({
-      tabs: s.tabs.some((x) => x.id === t.id) ? s.tabs : [...s.tabs, t],
+      tabs: withTab(s.tabs, t),
       activeTab: t.id,
       canvasOpen: true,
       usageView: false,
     })),
   // 最后一个页签关闭时画布关闭（interaction §6）。未保存的文件先过离开确认（canvas#leave）。
-  closeTab: (id) => {
+  closeTab: (id) => get().closeTabs([id]),
+  // owner-followups-1015 #05：closeTab 收成 closeTabs 的单元素情形——「关闭其他 / 关闭右侧」若逐个调 closeTab，
+  // 每个脏文件各弹一次离开确认，第二个确认会盖掉第一个的 Promise。当前页签被关时落到剩下的最后一个
+  //（关闭其他 / 关闭右侧时恰好就是右键的目标页签）。
+  closeTabs: (ids) => {
     const current = get()
-    const tab = current.tabs.find(t => t.id === id)
-    const edits = Object.entries(current.fileEdits).filter(([, edit]) => tab?.kind === 'file' && edit.path === tab.path)
+    const gone = new Set(ids)
+    const paths = new Set(current.tabs.filter(t => gone.has(t.id) && t.kind === 'file').map(t => t.path))
+    const edits = Object.entries(current.fileEdits).filter(([, edit]) => paths.has(edit.path))
     const close = () => {
       if (get().projectEpoch !== current.projectEpoch) return
       set(s => {
-        const tabs = s.tabs.filter(t => t.id !== id)
-        const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab
+        const tabs = s.tabs.filter(t => !gone.has(t.id))
+        const activeTab = s.activeTab != null && gone.has(s.activeTab) ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab
         return { tabs, activeTab, canvasOpen: tabs.length > 0 && s.canvasOpen }
       })
     }
@@ -587,6 +611,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     else set({ focusSnapshot: { canvasOpen: s.canvasOpen }, canvasOpen: false, usageView: false })
   },
   setFlowDialogOpen: (v) => set({ flowDialogOpen: v }),
+  setSessionLaterOpen: (v) => set({ sessionLaterOpen: v }),
   requestAgentScreen: () => set((s) => ({ agentScreenReq: s.agentScreenReq + 1 })),
   openPendingDialog: () => set({ pendingDialogOpen: true }),
   closePendingDialog: () => {

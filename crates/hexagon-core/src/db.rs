@@ -311,6 +311,22 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0063_agent_removed",
         include_str!("../migrations/0063_agent_removed.sql"),
     ),
+    (
+        "0064_push_rename",
+        include_str!("../migrations/0064_push_rename.sql"),
+    ),
+    (
+        "0065_release_targets",
+        include_str!("../migrations/0065_release_targets.sql"),
+    ),
+    (
+        "0066_release_card",
+        include_str!("../migrations/0066_release_card.sql"),
+    ),
+    (
+        "0067_release_target_card",
+        include_str!("../migrations/0067_release_target_card.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -345,6 +361,36 @@ impl Db {
             return Err(DbError::Sqlite(rusqlite::Error::InvalidQuery));
         }
         Ok(Self { conn })
+    }
+
+    /// 测试用：在 `path` 建一份只迁移到 `last`（含）的旧版本库，供「旧库升级读回」
+    /// 测试写旧形状的行，再用 [`Db::open`] 跑剩余迁移。
+    #[cfg(test)]
+    pub(crate) fn create_migrated_until(path: &Path, last: &str) -> Connection {
+        assert!(
+            MIGRATIONS.iter().any(|(v, _)| *v == last),
+            "unknown migration {last}"
+        );
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+        for (version, sql) in MIGRATIONS {
+            conn.execute_batch(sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [version],
+            )
+            .unwrap();
+            if *version == last {
+                break;
+            }
+        }
+        conn
     }
 
     /// 内存库，测试用。
@@ -454,6 +500,72 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n as usize, MIGRATIONS.len());
+    }
+
+    /// ADR 0093 / 0064: a pre-rename database reads back as push — cards keep
+    /// their state and payload, every publish_* event survives under its new
+    /// name, the old card wording follows, and no publish row is left behind.
+    #[test]
+    fn adr0093_publish_rows_migrate_to_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let old = Db::create_migrated_until(&path, "0063_agent_removed");
+        old.execute_batch(
+            r#"INSERT INTO projects (id, dir, name, mode) VALUES ('p', '/tmp/x', 'x', 'pack');
+            INSERT INTO pending_questions (id, project_id, kind, payload, state) VALUES
+              ('q1', 'p', 'publish', '{"remote":"origin","baseline":"main","warning":"远程发布不可逆：代码与产物将推送到项目外部"}', 'queued'),
+              ('q2', 'p', 'publish', '{"remote":"origin"}', 'answered'),
+              ('q3', 'p', 'permission', '{"tool":"bash"}', 'queued');
+            INSERT INTO events (project_id, kind, payload) VALUES
+              ('p', 'publish_requested', '{"remote":"origin","question_id":"q1"}'),
+              ('p', 'publish_confirmed', '{"remote":"origin","question_id":"q2"}'),
+              ('p', 'publish_rejected', '{"question_id":"q2"}'),
+              ('p', 'publish_failed', '{"remote":"origin","error":"x"}'),
+              ('p', 'system', '{"kind":"managed_decision","card_id":"q2","card_kind":"publish","action":"publish","outcome":"published"}');"#,
+        )
+        .unwrap();
+        drop(old);
+
+        let db = Db::open(&path).unwrap();
+        let q1 = crate::cards::get_queued(&db, "q1", crate::cards::CardKind::Push).unwrap();
+        assert_eq!(q1.payload["remote"], "origin");
+        assert_eq!(
+            q1.payload["warning"],
+            "推送不可逆：代码与产物将推送到项目外部"
+        );
+        let q2 = crate::cards::get(&db, "q2").unwrap();
+        assert_eq!(
+            (q2.kind.as_str(), q2.state),
+            ("push", crate::cards::CardState::Answered)
+        );
+        assert_eq!(crate::cards::get(&db, "q3").unwrap().kind, "permission");
+        use crate::trace::EventKind as K;
+        for kind in [
+            K::PushRequested,
+            K::PushConfirmed,
+            K::PushRejected,
+            K::PushFailed,
+        ] {
+            assert_eq!(db.events("p", Some(&[kind])).unwrap().len(), 1, "{kind:?}");
+        }
+        let leftover: i64 = db
+            .conn()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM events WHERE kind LIKE 'publish%' OR payload LIKE '%\"publish%')
+                      + (SELECT COUNT(*) FROM pending_questions WHERE kind = 'publish')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftover, 0);
+        // The rebuilt CHECK refuses the old kind.
+        assert!(db
+            .conn()
+            .execute(
+                "INSERT INTO pending_questions (id, project_id, kind) VALUES ('q9', 'p', 'publish')",
+                [],
+            )
+            .is_err());
     }
 
     #[test]

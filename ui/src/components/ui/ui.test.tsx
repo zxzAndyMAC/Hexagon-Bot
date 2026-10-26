@@ -141,6 +141,16 @@ describe('Switch（A10）', () => {
     expect(onChange).not.toHaveBeenCalled()
     expect(busy.getAttribute('data-state')).toBe('unchecked')
   })
+
+  it('命中区 ≥24×24、外观 30×18 不变（owner-followups-1015 #10，components A10「命中区」）', async () => {
+    // jsdom 不排版，钉类名：轨 30×18 不动，透明 ::before 上下各外扩 3px → 30×24 可点（伪元素命中归宿主按钮）
+    await render(<Switch aria-label="hit" checked={false} />)
+    const cls = $('[aria-label="hit"]').className
+    expect(cls).toContain('h-[18px]')
+    expect(cls).toContain('w-[30px]')
+    expect(cls).toContain('before:-inset-y-[3px]')
+    expect(cls).toContain('before:inset-x-0')
+  })
 })
 
 describe('Checkbox（A11）', () => {

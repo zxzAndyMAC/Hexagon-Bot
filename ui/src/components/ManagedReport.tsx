@@ -71,7 +71,7 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
     ? (eventId: number) => { onClose(); show(eventId) }
     : show
   const body = failed
-    ? <p role="alert" className="flex items-center gap-2 text-[12.5px] text-red"><Icon name="warn" size={14} />{t('delegation.readFailed')}</p>
+    ? <p role="alert" className="flex items-center gap-2 text-[12.5px] text-red-ink"><Icon name="warn" size={14} />{t('delegation.readFailed')}</p>
     : history === null
       ? <SkeletonRows rows={3} label={t('delegation.report')} className="p-0" />
       : records.length === 0
@@ -80,9 +80,9 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
         : <>
           <div className="grid grid-cols-4 gap-2.5" data-managed-kpi>
             <Kpi label={t('delegation.kpiDecisions')} value={t('delegation.kpiTimes', { count: records.length })} />
-            <Kpi label={t('delegation.kpiDone')} value={t('delegation.kpiItems', { count: done.length })} tone="text-green" />
+            <Kpi label={t('delegation.kpiDone')} value={t('delegation.kpiItems', { count: done.length })} tone="text-green-ink" />
             {/* gap A3（managed#report）：第四格由「失败」换成「花费」（本次托管时段）；失败并入「未完成」。 */}
-            <Kpi label={t('delegation.kpiIncomplete')} value={t('delegation.kpiItems', { count: unfinished.length })} tone="text-red" />
+            <Kpi label={t('delegation.kpiIncomplete')} value={t('delegation.kpiItems', { count: unfinished.length })} tone="text-red-ink" />
             <Kpi label={t('delegation.kpiSpend')} value={summary ? spendText(t, summary) : '—'} />
           </div>
           <p className="mt-1.5 text-[12px] text-ink-3">{t('delegation.recent', { count: records.length })}</p>

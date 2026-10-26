@@ -5,6 +5,9 @@ import './i18n'
 import { ProviderManager } from './components/ProviderManager'
 import { api } from './api'
 import type { ProvidersView } from './gen/ProvidersView'
+import type { ProviderPreset } from './gen/ProviderPreset'
+// #22：ProviderPreset 的说明性字段（目录元数据）；旧用例只关心前五个字段。
+const PRESET_META = { icon_key: '', website: '', docs: '', sample_models: [] as string[], origin: 'manual' as const }
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -145,6 +148,29 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     root.unmount()
   })
 
+  it('本机回环端点未存钥匙：状态点为 on、不显示缺少钥匙、default 槽算就绪、检测可用（票 25）', async () => {
+    const local = { ...prov('ollama', 'Ollama', false, true), base_url: 'http://localhost:11434/v1' }
+    const lookalike = { ...prov('evil', 'EvilCo', false, true), base_url: 'http://localhost.evil.com/v1' }
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [local, lookalike], slots: { default: { provider_id: 'ollama', model: 'llama3' } } })
+    const { el, root } = await render(<ProviderManager />)
+    // 本机 on，形似本机的远端仍 warn
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="on"]')).toHaveLength(1)
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="warn"]')).toHaveLength(1)
+    expect(el.querySelector('[data-slot-state="bound"]')!.textContent).toBe('Ready')
+    expect(el.textContent).not.toContain('Missing key')
+    const row = (name: string) =>
+      [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
+    const checkBtn = () =>
+      [...el.querySelectorAll('button')].find((b) => /check|检测/i.test(b.textContent ?? ''))!
+    await act(async () => row('Ollama').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(el.textContent).not.toContain('no key configured')
+    expect(checkBtn().getAttribute('aria-disabled')).toBeNull()
+    await act(async () => row('EvilCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(el.textContent).toContain('no key configured')
+    expect(checkBtn().getAttribute('aria-disabled')).toBe('true')
+    root.unmount()
+  })
+
   // 固定槽是 UI 词表（providers.slot_*）——显示本地化名 + 原槽名参照；
   // 角色自定义槽名是模板数据，原文照显不翻译。
   it('槽位名本地化：固定槽显示本地化名+原键，自定义槽原文', async () => {
@@ -246,10 +272,10 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
   })
 
   // review R3（settings#models「检测并拉取模型」「搜索供应商」）：曾是「检测」+「拉取列表」两个按钮（调同一函数）、
-  // 占位「筛选供应商…」。现在一个按钮两段状态：检测连接 → 拉取模型；检测失败停在原因上，不拉列表。
-  it('检测并拉取模型是一个按钮两段状态，检测失败不拉列表', async () => {
-    let finishProbe!: (v: Awaited<ReturnType<typeof api.probeProviderKey>>) => void
-    const probe = vi.spyOn(api, 'probeProviderKey').mockReturnValue(new Promise((done) => { finishProbe = done }))
+  // 占位「筛选供应商…」，合为一个按钮。owner-followups-1015 #03：这个按钮曾先 probe 再 fetch，一次点击请求两次
+  // 同一个模型目录；现在只拉一次目录、单段加载态，失败原因来自拉取本身的分类码（与连接检测同词）。
+  it('检测并拉取模型只请求一次目录：单段加载态，成功写数量并合并，失败给分类原因', async () => {
+    const probe = vi.spyOn(api, 'probeProviderKey')
     let finishFetch!: (v: Awaited<ReturnType<typeof api.fetchProviderModels>>) => void
     const fetch = vi.spyOn(api, 'fetchProviderModels').mockReturnValue(new Promise((done) => { finishFetch = done }))
     const { el, root } = await render(<ProviderManager />)
@@ -258,21 +284,33 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
       await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true })))
       const buttons = () => [...el.querySelectorAll('button')].map((b) => b.textContent)
+      const click = () => act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
+      const status = () => el.querySelector('[role="status"]')!
       expect(buttons().filter((x) => x === 'Check and fetch models')).toHaveLength(1)
       expect(buttons()).not.toContain('Fetch list')
-      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
-      expect(buttons()).toContain('Checking connection…')
-      await act(async () => finishProbe({ ok: true, failure: null, status: 200, model_listed: null, window: null }))
+      await click()
       expect(buttons()).toContain('Fetching models…')
-      await act(async () => finishFetch([]))
+      expect(buttons()).not.toContain('Checking connection…')
+      await act(async () => finishFetch([{ id: 'fresh-1', name: null, group: null, caps: [], context_window: null, max_output: null }]))
       expect(buttons()).toContain('Check and fetch models')
-      expect(el.querySelector('[role="status"]')!.textContent).toBe('0 models fetched')
+      expect(status().textContent).toBe('1 models fetched')
+      expect(vi.mocked(api.saveProvider).mock.calls.at(-1)![0].models!.map((m) => m.id)).toEqual(['fresh-1'])
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(probe).not.toHaveBeenCalled()
 
-      probe.mockResolvedValueOnce({ ok: false, failure: 'authentication', status: 401, model_listed: null, window: null })
-      fetch.mockClear()
-      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
-      expect(fetch).not.toHaveBeenCalled()
-      expect(el.querySelector('[role="status"]')!.className).toContain('text-red')
+      fetch.mockRejectedValueOnce({ code: 'authentication', message: 'model catalog request failed: authentication' })
+      await click()
+      expect(status().className).toContain('text-red')
+      expect(status().textContent).toBe('The provider rejected this key. Check that it was copied in full and has not expired.')
+
+      fetch.mockRejectedValueOnce({ code: 'missing_credential', message: 'model catalog request failed: missing_credential' })
+      await click()
+      expect(status().textContent).toBe('No API key is saved for this provider. Enter it above, then check again.')
+
+      fetch.mockRejectedValueOnce({ code: 'invalid_response', message: 'model catalog request failed: invalid_response' })
+      await click()
+      expect(status().textContent).toBe('The provider did not return a model catalog. Check the Base URL and provider type.')
+      expect(probe).not.toHaveBeenCalled()
     } finally { await act(async () => root.unmount()); el.remove() }
   })
 
@@ -369,13 +407,35 @@ describe('Jev 槽', () => {
 describe('内置目录 = core provider_presets', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('Base URL 下方实时显示实际请求地址；core 不给（遮蔽的已存地址）就不显示（票 21）', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([])
+    const preview = vi.spyOn(api, 'providerRequestUrl').mockImplementation(async (kind, base) =>
+      base.startsWith('https://typed') ? `${base}/v1/chat/completions#${kind}` : null)
+    const { el, root } = await render(<ProviderManager />)
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const input = el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement
+    const note = () => input.closest('[data-slot=field]')!.querySelector('[data-request-url]')
+    expect(note()).toBeNull()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'https://typed.example')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(preview).toHaveBeenLastCalledWith('openai', 'https://typed.example')
+    expect(note()!.textContent).toBe('Request URL: https://typed.example/v1/chat/completions#openai')
+    root.unmount()
+  })
+
   it('列出未配置的预设（同 id / 同名已配置的不列），点选按预设填表并以预设 id 保存', async () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
     vi.spyOn(api, 'presetRoles').mockResolvedValue([])
     vi.spyOn(api, 'providerPresets').mockResolvedValue([
-      { id: 'acme', name: 'Acme', kind: 'openai', base_url: 'https://acme.example/v1', default_model: 'acme-1' },
-      { id: 'a', name: 'Same Id', kind: 'openai', base_url: 'https://a.example', default_model: '' },
-      { id: 'other', name: 'ReadyCo', kind: 'openai', base_url: 'https://r.example', default_model: '' },
+      { id: 'acme', name: 'Acme', kind: 'openai', base_url: 'https://acme.example/v1', default_model: 'acme-1', ...PRESET_META },
+      { id: 'a', name: 'Same Id', kind: 'openai', base_url: 'https://a.example', default_model: '', ...PRESET_META },
+      { id: 'other', name: 'ReadyCo', kind: 'openai', base_url: 'https://r.example', default_model: '', ...PRESET_META },
     ])
     const save = vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
     const { el, root } = await render(<ProviderManager />)
@@ -395,6 +455,90 @@ describe('内置目录 = core provider_presets', () => {
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'acme', name: 'Acme', base_url: 'https://acme.example/v1', models: [expect.objectContaining({ id: 'acme-1' })] }),
       undefined)
+    root.unmount()
+  })
+})
+
+// owner-followups-1015 #22：内置目录引入 56 家快照（core provider_catalog），设置左列可搜索、已启用在前，
+// 目录条目不预填模型，详情给官网 / 文档 / 示例模型作说明；无公共地址的留空并提示自填。
+describe('内置服务商目录（#22）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const preset = (p: Partial<ProviderPreset> & Pick<ProviderPreset, 'id' | 'name'>): ProviderPreset => ({
+    kind: 'openai', base_url: `https://${p.id}.example/v1`, default_model: '', icon_key: '', website: '', docs: '',
+    sample_models: [], origin: 'catalog', ...p,
+  })
+  const CATALOG = [
+    preset({ id: 'dashscope', name: 'Bailian', website: 'https://www.aliyun.com/product/bailian', docs: 'https://help.aliyun.com/zh/model-studio/', sample_models: ['deepseek-r1', 'deepseek-v3'] }),
+    preset({ id: 'gpustack', name: 'GPUStack', base_url: '' }),
+    preset({ id: 'perplexity', name: 'Perplexity', base_url: 'https://api.perplexity.ai/chat/completions' }),
+  ]
+  const rowNames = (el: HTMLElement) =>
+    [...el.querySelectorAll('[role=option]')].map((o) => o.textContent ?? '')
+  const clickRow = async (el: HTMLElement, name: string) => {
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === name)!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+
+  it('已配置组里已启用的排在停用的前面，同组保持原顺序', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({
+      providers: [prov('c', 'OffCo', true, false), prov('a', 'ReadyCo', true, true), prov('b', 'NoKeyCo', false, true)],
+      slots: {},
+    })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    const { el, root } = await render(<ProviderManager />)
+    const names = rowNames(el)
+    const at = (n: string) => names.findIndex((x) => x.includes(n))
+    expect(at('ReadyCo')).toBeGreaterThanOrEqual(0)
+    expect(at('ReadyCo')).toBeLessThan(at('NoKeyCo'))
+    expect(at('NoKeyCo')).toBeLessThan(at('OffCo'))
+    expect(at('OffCo')).toBeLessThan(at('Bailian'))
+    root.unmount()
+  })
+
+  it('搜索按名称或 id 命中目录条目', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    const { el, root } = await render(<ProviderManager />)
+    const search = el.querySelector('input[placeholder="Search providers"]') as HTMLInputElement
+    const type = async (v: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, v)
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await type('dashscope')
+    expect(rowNames(el)).toEqual([expect.stringContaining('Bailian')])
+    await type('perplex')
+    expect(rowNames(el)).toEqual([expect.stringContaining('Perplexity')])
+    root.unmount()
+  })
+
+  it('目录条目详情：不预填模型，示例模型只作说明，官网 / 文档可见', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    vi.spyOn(api, 'providerRequestUrl').mockResolvedValue(null)
+    const { el, root } = await render(<ProviderManager />)
+    await clickRow(el, 'Bailian')
+    const info = el.querySelector('[data-catalog-info]')!
+    expect(info.textContent).toContain('https://www.aliyun.com/product/bailian')
+    expect(info.textContent).toContain('https://help.aliyun.com/zh/model-studio/')
+    expect(info.querySelector('[data-sample-models]')!.textContent).toContain('deepseek-r1 · deepseek-v3')
+    expect(el.querySelector('[data-model-row]')).toBeNull()
+    root.unmount()
+  })
+
+  it('无公共地址的条目地址留空，并提示自填', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    vi.spyOn(api, 'providerRequestUrl').mockResolvedValue(null)
+    const { el, root } = await render(<ProviderManager />)
+    await clickRow(el, 'GPUStack')
+    const input = el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.closest('[data-slot=field]')!.textContent).toContain('no public address')
     root.unmount()
   })
 })

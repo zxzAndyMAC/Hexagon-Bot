@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { useUiStore } from '../store'
+import { projectRelPath } from '../fileActions'
 import { useCopyFlash } from '../useCopyFlash'
 import { diffLines, type DiffOp } from '../diff'
 import { Icon, type IconName } from './Icon'
@@ -13,6 +14,8 @@ import { CodeBlock } from './Md'
 import { DiffView } from './DiffView'
 import { SpinnerRing } from './SpinnerRing'
 import { CodeChip } from './ui/code-chip'
+import { FileContextMenu } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
 import { toolInputSummary, toolOutcome, TOOL_ICON, TOOL_LABEL, type ToolCall, type ToolOutcome } from '../agentSteps'
 
 // 渲染上限（票 04）：实时流/结果体只渲末 32KB——长输出（cargo test 全量）
@@ -64,6 +67,28 @@ function CopyBtn({ text }: { text: string }) {
   )
 }
 
+/**
+ * 卡头右键菜单（#32，2026-10-21 负责人裁决「凡是显示有盘上路径的文件，右键都给同一份文件菜单」）：
+ * 「打开」= 文件写入开文件页签、产物写入开产物页签；根外的绝对路径只留「打开」；没有文件的卡不挂菜单。
+ */
+function ExecHeadMenu({ file, children }: { file?: { path: string; open: 'file' | 'artifact' }; children: ReactNode }) {
+  const target = useProjectFileTarget(file?.path || null, { onOpen: file?.path ? () => openExecFile(file) : undefined, artifact: file?.open === 'artifact' })
+  return <FileContextMenu {...target}>{children}</FileContextMenu>
+}
+
+/**
+ * 打开工具调用涉及的文件：产物写入（artifact_write，路径是 `.hexagon/` 内相对）开产物页签，其余（fs_read / fs_write /
+ * fs_patch 的仓库路径）开文件页签。执行卡卡头与时间线文件 chip 共用这一处（#33 L4：chip 曾一律开 `art:`，
+ * 仓库文件被当产物打开，产物视图找不到它）。
+ */
+export function openExecFile({ path, open }: { path: string; open: 'file' | 'artifact' }) {
+  const root = useUiStore.getState().projectRoot
+  const rel = projectRelPath(path, root) ?? path
+  useUiStore.getState().openTab(open === 'artifact'
+    ? { id: `art:${path}`, kind: 'artifact', title: path, path }
+    : { id: `file:${rel}`, kind: 'file', title: rel.split('/').pop() || rel, path: rel })
+}
+
 /** 执行卡壳：收态=一行（与 chip 行同密度），展开出体。 */
 export function ExecCard({
   icon,
@@ -73,6 +98,7 @@ export function ExecCard({
   result,
   ok,
   copyText,
+  file,
   delay = 0,
   animate = true,
   children,
@@ -86,6 +112,8 @@ export function ExecCard({
   result?: ReactNode
   ok: ToolOutcome
   copyText?: string
+  /** 卡头指向的盘上文件（fs_patch / fs_write / artifact_write 的路径）：卡头右键 = 共用文件菜单（#32）。 */
+  file?: { path: string; open: 'file' | 'artifact' }
   delay?: number
   // 虚拟列表里滚回视口的行会重挂载——入场动画只该在「刚展开」播一次，
   // 重挂载再播就是闪烁（owner 反馈：快速滚动抖动）。Timeline 传 fresh。
@@ -96,6 +124,7 @@ export function ExecCard({
   const toggle = () => setOpen((v) => !v)
   return (
     <div className="exec-card" style={animate ? { animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` } : undefined}>
+      <ExecHeadMenu file={file}>
       <div className="exec-head">
         <button type="button" className="exec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={icon} size={14} />
@@ -110,6 +139,7 @@ export function ExecCard({
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
         </button>
       </div>
+      </ExecHeadMenu>
       {open && <div className="exec-body">{children}</div>}
     </div>
   )
@@ -247,6 +277,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
     )
     return (
       <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || tool} ok={ok} delay={delay} animate={animate}
+        file={path ? { path, open: 'file' } : undefined}
         copyText={typeof inp.new === 'string' ? inp.new : undefined} meta={stats}>
         <PatchBody call={call} />
       </ExecCard>
@@ -262,7 +293,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
     )
     return (
       <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || tool} ok={ok} delay={delay} animate={animate}
-        copyText={path || undefined}
+        copyText={path || undefined} file={path ? { path, open: 'artifact' } : undefined}
         meta={<>{artVersion > 0 && <span className="chip mono">v{artVersion}</span>}{stats}</>}>
         <ArtifactBody call={call} onOps={setArtOps} />
       </ExecCard>
@@ -273,7 +304,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
   const bytes = typeof inp.bytes === 'number' ? inp.bytes : null
   return (
     <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || toolInputSummary(p) || tool} ok={ok} delay={delay} animate={animate}
-      copyText={path || undefined}
+      copyText={path || undefined} file={path ? { path, open: 'file' } : undefined}
       meta={bytes != null ? <span className="chip mono">{fmtBytes(bytes)}</span> : undefined}>
       <JsonBody call={call} />
     </ExecCard>

@@ -19,8 +19,16 @@ pub enum AdminError {
     Json(#[from] serde_json::Error),
     #[error("unknown provider: {0}")]
     UnknownProvider(String),
-    #[error("missing API key: provider/{0}")]
-    MissingKey(String),
+    /// owner-followups-1015 #03：拉取模型目录失败。`code` 与连接检测（`KeyProbe::failure`）
+    /// 同一套词（含缺钥匙 `missing_credential`），IPC 码面直接就是这个词，界面按词给原因。
+    /// 曾是 `MissingKey` + 笼统 `ProvidersError::Http("provider request or response failed")`，
+    /// 设置页只好先 probe 一次拿原因再 fetch 一次拿目录——同一目录请求两次。
+    /// Display 只带原因词与状态，不带 URL / 响应正文（Reliability 22：原文可能含凭据）。
+    #[error("model catalog request failed: {code}")]
+    Catalog {
+        code: &'static str,
+        status: Option<u16>,
+    },
     /// 票 16：优化描述要的是主对话模型（default 槽），不是任意一个已配槽。
     #[error("主对话模型未就绪：需要启用的供应商、钥匙和 default 槽")]
     MainChatUnavailable,
@@ -33,6 +41,8 @@ pub use crate::provider_config::{ModelEntry, ProviderDef};
 pub use crate::provider_probe::{probe_key, KeyProbe};
 // gap B8：向导服务商下拉的内置预设同走本模块出口。
 pub use crate::provider_presets::{presets, ProviderPreset};
+// 票 21：表单下方「实际请求地址」实时预览，与保存同一道规范化。
+pub use crate::provider_url::preview as request_url_preview;
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。
@@ -222,13 +232,17 @@ pub fn save(
     let mut def = def;
     let doc = provider_config::load()?;
     let current = doc.providers.iter().find(|p| p.id == def.id);
-    def.base_url =
-        crate::data_boundary::restore(&def.base_url, current.map(|p| p.base_url.as_str()), true)
-            .map_err(|_| {
-                AdminError::Providers(provider_config::ProvidersError::EmptyField(
-                    "reload_stored_configuration",
-                ))
-            })?;
+    // 票 21：新填地址在这里规范化（provider_url 模块注释），遮蔽形原样还原。
+    def.base_url = crate::provider_url::resolve_input(
+        &def.kind,
+        &def.base_url,
+        current.map(|p| p.base_url.as_str()),
+    )
+    .map_err(|_| {
+        AdminError::Providers(provider_config::ProvidersError::EmptyField(
+            "reload_stored_configuration",
+        ))
+    })?;
     provider_config::save_provider(&def)?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         store.set(&provider_key_name(&def.id), s.trim())?;
@@ -280,7 +294,8 @@ pub fn remove_search() -> Result<(), AdminError> {
     Ok(provider_config::set_search(None)?)
 }
 
-/// 拉取/检测供应商模型目录：GET /models；key 从凭据库现取，缺 key 直报。
+/// 拉取供应商模型目录：GET /models；key 从凭据库现取。设置页「检测并拉取」只调这一次——
+/// 失败即 [`AdminError::Catalog`]，原因词与连接检测相同（缺钥匙 = `missing_credential`）。
 pub fn fetch_models(
     id: &str,
     store: &dyn CredentialStore,
@@ -291,17 +306,25 @@ pub fn fetch_models(
         .iter()
         .find(|p| p.id == id)
         .ok_or_else(|| AdminError::UnknownProvider(id.into()))?;
-    let key = store
-        .get(&provider_key_name(&def.id))?
-        .ok_or_else(|| AdminError::MissingKey(def.id.clone()))?;
-    let models = provider_config::fetch_models(def, &key)?;
-    Ok(models)
+    // 票 25：本机回环端点没钥匙也拉（不带鉴权头）；其他主机仍缺钥匙即拒。
+    let auth =
+        crate::provider_loopback::decide(store.get(&provider_key_name(&def.id))?, &def.base_url);
+    if auth == crate::provider_loopback::Auth::Missing {
+        return Err(AdminError::Catalog {
+            code: "missing_credential",
+            status: None,
+        });
+    }
+    provider_config::fetch_catalog(def, auth.key()).map_err(|f| AdminError::Catalog {
+        code: f.code,
+        status: f.status,
+    })
 }
 
 /// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
 /// 主对话 = default 槽（票 13 向导第一步放行的那一条），不是角色槽。
-/// 缺绑定、供应商不存在、停用、空模型名、没钥匙 → 不发请求。
-/// 槽已解析、供应商启用、模型名非空、钥匙非空。缺一档就不可用。
+/// 缺绑定、供应商不存在、停用、空模型名、没钥匙（本机回环端点除外，票 25）→ 不发请求。
+/// 槽已解析、供应商启用、模型名非空、钥匙非空或回环免钥匙。缺一档就不可用。
 /// 回退链只在 `resolve_slot`。起草槽和主对话槽共用这一段，避免两处钥匙检查分叉。
 fn ready_binding<'a>(
     doc: &'a provider_config::ProviderDoc,
@@ -320,11 +343,8 @@ fn ready_binding<'a>(
         return Err(AdminError::MainChatUnavailable);
     }
     let key = store.get(&provider_key_name(&def.id))?;
-    if key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .is_none()
+    if crate::provider_loopback::decide(key, &def.base_url)
+        == crate::provider_loopback::Auth::Missing
     {
         return Err(AdminError::MainChatUnavailable);
     }
@@ -370,7 +390,8 @@ mod tests {
             id: "p".into(),
             name: "P".into(),
             kind: ProviderKind::OpenAi,
-            base_url: "http://localhost".into(),
+            // 票 25 起回环地址免钥匙；缺钥匙用例需非回环地址。
+            base_url: "https://p.invalid".into(),
             models: vec![],
             enabled,
         });
@@ -413,6 +434,15 @@ mod tests {
         let bare = MemoryStore::default();
         assert!(matches!(
             require_main_chat(&doc_default(true), &bare),
+            Err(AdminError::MainChatUnavailable)
+        ));
+        // 票 25：本机回环端点没钥匙也算主对话槽可用；形似本机的远端仍不可用。
+        let mut local = doc_default(true);
+        local.providers[0].base_url = "http://localhost:11434/v1".into();
+        assert!(require_main_chat(&local, &bare).is_ok());
+        local.providers[0].base_url = "http://localhost.evil.com/v1".into();
+        assert!(matches!(
+            require_main_chat(&local, &bare),
             Err(AdminError::MainChatUnavailable)
         ));
     }

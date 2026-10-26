@@ -73,7 +73,7 @@ export function LimitEditor({ onDone }: { onDone: () => void }) {
         <Button size="xs" variant="primary" loading={saving} onClick={() => void save()}>{t('cards.confirm')}</Button>
         <Button size="xs" variant="ghost" onClick={onDone}>{t('usageCard.cancel')}</Button>
       </div>
-      {failed && <div role="alert" className="mt-1 text-[12px] text-red">{t('usageCard.limitFailed')}</div>}
+      {failed && <div role="alert" className="mt-1 text-[12px] text-red-ink">{t('usageCard.limitFailed')}</div>}
     </div>
   )
 }
@@ -97,7 +97,7 @@ export function UsageCard({ onDetail, onRaise = openUsageSettings }: { onDetail:
 
   const amount = (
     <div className="mt-3 flex items-baseline gap-1.5">
-      <span data-usage-amount className={cn('text-[22px] font-semibold tracking-[-0.02em] tabular-nums', capped ? 'text-red' : 'text-ink')}>
+      <span data-usage-amount className={cn('text-[22px] font-semibold tracking-[-0.02em] tabular-nums', capped ? 'text-red-ink' : 'text-ink')}>
         {total ? fmtYuan(spent) : '—'}
       </span>
       <span className="text-[13px] text-ink-3">{limitMc != null ? t('usageCard.ofLimit', { limit: fmtYuan(limitMc) }) : t('usageCard.noLimit')}</span>
@@ -117,7 +117,7 @@ export function UsageCard({ onDetail, onRaise = openUsageSettings }: { onDetail:
   if (capped) {
     return (
       <div data-usage-card="cap">
-        <div className="flex items-center gap-2 rounded-[var(--r-sm)] bg-red-tint px-2.5 py-2 text-[12.5px] text-red">
+        <div className="flex items-center gap-2 rounded-[var(--r-sm)] bg-red-tint px-2.5 py-2 text-[12.5px] text-red-ink">
           <Icon name="warn" size={14} />
           <b className="flex-1 font-semibold">{t('usageEntry.capLabel')}</b>
         </div>

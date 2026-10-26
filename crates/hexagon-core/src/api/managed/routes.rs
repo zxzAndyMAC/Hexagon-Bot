@@ -51,6 +51,31 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
     let p = &card.payload;
     let action = || p["action_id"].as_str().map(str::to_string);
     match (card.kind.as_str(), p["sub"].as_str()) {
+        // owner-followups-1015 #13 (ADR 0093 follow-up ruling): a force push
+        // stays a safety net the delegation never answers — not even "deny" —
+        // so the card stays with the owner. Read from the persisted raw input
+        // (the bytes that run), not a payload label. Ordinary pushes are taken over.
+        // Ticket 33 P1 (#13 owner ruling A, 2026-10-25): an implicit-target push the
+        // host resolved to one branch at ask time follows ordinary-push rules; the
+        // only payload fact trusted is that host-written resolution (from_card).
+        ("permission", _)
+            if p["tool"] == "bash"
+                && matches!(
+                    crate::push_class::from_card(
+                        p["raw_input"]["cmd"].as_str().unwrap_or(""),
+                        &p["push"]
+                    ),
+                    crate::push_class::PushClass::Force(_)
+                ) =>
+        {
+            None
+        }
+        // owner-followups-1015 #16 (ADR 0093 follow-up ruling: delegation may not
+        // register release targets): a Register release target card stays with the
+        // owner — not even "end" — so a model-drafted command is only ever registered
+        // by the owner's own approval. Cost model: a held card waits for the owner;
+        // a delegated approval registers a command delegation may then release.
+        ("release_target", _) => None,
         ("permission", _) => Some(format!(
             "permission:{}",
             action().unwrap_or_else(|| card.id.clone())
@@ -102,10 +127,18 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("escalation", Some("context_overflow")) => {
             Some(format!("context:{}", p["trigger_turn_id"]))
         }
-        ("publish", _) => Some(format!(
-            "publish:{}:{}",
+        ("push", _) => Some(format!(
+            "push:{}:{}",
             p["remote"].as_str().unwrap_or_default(),
             p["commit"].as_str().unwrap_or(&card.id)
+        )),
+        // owner-followups-1015 #15: one budget per release card. A release has no
+        // business identity beyond the owner's request (no commit to bind to), and
+        // a new request is a new decision.
+        ("release", _) => Some(format!(
+            "release:{}:{}",
+            p["target_id"].as_str().unwrap_or_default(),
+            card.id
         )),
         // One business decision per session/operation/path, across new cards.
         ("worktree", _) => Some(format!(
@@ -405,9 +438,9 @@ pub(super) fn grant_route(p: &serde_json::Value, present: bool, direct: bool) ->
     }
 }
 
-/// Host-verified facts for a delegated publish (no secret values).
+/// Host-verified facts for a delegated push (no secret values).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PublishFacts {
+pub(crate) struct PushFacts {
     pub target_configured: bool,
     pub credential_present: bool,
     pub delivery_accepted: bool,
@@ -415,13 +448,13 @@ pub(crate) struct PublishFacts {
     pub commit_unchanged: bool,
 }
 
-/// Test3/22 (Q13/Q20): publish only to an existing project target with its
+/// Test3/22 (Q13/Q20): push only to an existing project target with its
 /// project credential, after final acceptance, for the exact version that was
 /// requested. Never a new target, a personal login, or an accepted-by-model
-/// shortcut. Cost model: a false refusal leaves an unpublished but accepted
-/// delivery (visible, retryable by the owner); a false publish is an
+/// shortcut. Cost model: a false refusal leaves an unpushed but accepted
+/// delivery (visible, retryable by the owner); a false push is an
 /// irreversible external effect.
-pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static str) {
+pub(crate) fn push_forced(facts: &PushFacts) -> (&'static str, &'static str) {
     let checks = [
         (facts.target_configured, "target_missing"),
         (facts.credential_present, "credential_missing"),
@@ -431,7 +464,40 @@ pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static st
     ];
     match checks.iter().find(|(ok, _)| !ok) {
         Some((_, reason)) => ("incomplete", reason),
-        None => ("publish", "configured_target_accepted_delivery"),
+        None => ("push", "configured_target_accepted_delivery"),
+    }
+}
+
+/// Host-verified facts for a delegated release (no secret values).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ReleaseFacts {
+    /// The card's target is still registered.
+    pub target_registered: bool,
+    /// Name, command, working directory and credential names still match the card.
+    pub target_unchanged: bool,
+    /// Every declared credential is stored in the keychain.
+    pub credentials_present: bool,
+}
+
+/// owner-followups-1015 #15 (ADR 0093 follow-up ruling; CONTEXT.md 托管:
+/// 发布限已有目标与可用项目凭据): delegation may confirm a release card only for
+/// a target the owner already registered, unchanged since the card was asked,
+/// with every credential stored. It never registers or edits a target (no
+/// route reaches `release_targets::save`). Unlike push there is no acceptance
+/// gate: the owner ruling limits delegated releases to existing targets and
+/// credentials, nothing more. Cost model as `push_forced`: a false refusal
+/// leaves one unreleased card (visible; the report points to Settings ·
+/// Release); a false release is an irreversible external effect, so every
+/// fact must hold.
+pub(crate) fn release_forced(facts: &ReleaseFacts) -> (&'static str, &'static str) {
+    let checks = [
+        (facts.target_registered, "target_missing"),
+        (facts.target_unchanged, "target_changed"),
+        (facts.credentials_present, "credential_missing"),
+    ];
+    match checks.iter().find(|(ok, _)| !ok) {
+        Some((_, reason)) => ("incomplete", reason),
+        None => ("release", "registered_target_credentials_present"),
     }
 }
 
@@ -439,7 +505,7 @@ pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static st
 /// decider may confirm a worktree card only when the host has just rechecked
 /// every bound fact (session, canonical root/path, baseline commit, and for
 /// cleanup ownership, registration and a clean tree). Any failed fact forces
-/// a refusal the model cannot override. Cost model as `publish_forced`: a
+/// a refusal the model cannot override. Cost model as `push_forced`: a
 /// false refusal leaves the owner one more request; a false confirm writes or
 /// deletes a directory on a stale decision.
 pub(crate) fn worktree_forced(check: &Result<(), WorktreeError>) -> (&'static str, &'static str) {
@@ -634,15 +700,27 @@ impl Workbench {
                 fallback: "end",
             },
             ("escalation", _) => flag_route(p),
-            ("publish", _) => {
-                let facts = self.publish_facts(p)?;
+            ("push", _) => {
+                let facts = self.push_facts(p)?;
                 Route {
                     options: opts(&[
-                        ("publish", "push to the configured target"),
-                        ("incomplete", "do not publish"),
+                        ("push", "push to the configured target"),
+                        ("incomplete", "do not push"),
                     ]),
                     state: String::new(),
-                    forced: Some(publish_forced(&facts)),
+                    forced: Some(push_forced(&facts)),
+                    fallback: "incomplete",
+                }
+            }
+            ("release", _) => {
+                let facts = self.release_facts(p)?;
+                Route {
+                    options: opts(&[
+                        ("release", "run the registered release command"),
+                        ("incomplete", "do not release"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(release_forced(&facts)),
                     fallback: "incomplete",
                 }
             }
@@ -676,7 +754,7 @@ impl Workbench {
         }))
     }
 
-    fn publish_facts(&self, p: &serde_json::Value) -> Result<PublishFacts, ApiError> {
+    fn push_facts(&self, p: &serde_json::Value) -> Result<PushFacts, ApiError> {
         let remote = p["remote"].as_str().unwrap_or_default();
         let git =
             |args: &[&str]| crate::git::run(&self.repo_root, args).map(|o| o.trim().to_string());
@@ -690,11 +768,10 @@ impl Workbench {
             )
             .ok();
         let final_seq = self.pack.as_ref().map(|pack| pack.stages.len() as i64 - 1);
-        Ok(PublishFacts {
+        Ok(PushFacts {
             target_configured: !remote.is_empty() && git(&["remote", "get-url", remote]).is_ok(),
-            credential_present: self
-                .creds
-                .get(&format!("publish/{remote}"))
+            // Same name rule as the push itself, legacy `publish/<remote>` included (ADR 0093).
+            credential_present: crate::push::credential(self.creds.as_ref(), remote)
                 .is_ok_and(|value| value.is_some()),
             delivery_accepted: matches!((latest, final_seq), (Some((seq, state)), Some(last)) if state == "done" && seq == last),
             baseline_unchanged: crate::git::baseline_branch(&self.repo_root)
@@ -702,6 +779,35 @@ impl Workbench {
             commit_unchanged: p["commit"].is_string()
                 && git(&["rev-parse", p["baseline"].as_str().unwrap_or("HEAD")])
                     .is_ok_and(|tip| p["commit"] == tip.as_str()),
+        })
+    }
+
+    fn release_facts(&self, p: &serde_json::Value) -> Result<ReleaseFacts, ApiError> {
+        let id = p["target_id"].as_str().unwrap_or_default();
+        let target = match crate::release_targets::row(&self.db, &self.project_id, id) {
+            Ok(t) => t,
+            Err(crate::release_targets::ReleaseError::ReleaseTargetUnknown(_)) => {
+                return Ok(ReleaseFacts::default())
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let asked: Vec<&str> = p["credentials"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let declared: Vec<&str> = target.credentials.iter().map(String::as_str).collect();
+        Ok(ReleaseFacts {
+            target_registered: true,
+            target_unchanged: p["command"] == target.command.as_str()
+                && p["cwd"] == target.cwd.as_str()
+                && p["name"] == target.name.as_str()
+                && asked == declared,
+            // Presence only; the value is dropped on this line (same rule as the confirm gate).
+            credentials_present: target.credentials.iter().all(|c| {
+                self.creds
+                    .get(&crate::release_targets::credential_key(&target.id, c))
+                    .is_ok_and(|v| v.is_some_and(|v| !v.is_empty()))
+            }),
         })
     }
 

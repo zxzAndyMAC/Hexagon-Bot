@@ -1825,7 +1825,9 @@ fn provider_reload_document(
             id: id.into(),
             name: id.into(),
             kind: crate::provider::ProviderKind::OpenAi,
-            base_url: "http://127.0.0.1:9".into(),
+            // 票 25 起回环地址无钥匙会不带头直连；这组用例要「无钥匙 = 不发请求、报
+            // MissingCredential」，所以用非回环地址（.invalid 保证即便误发也解析不到）。
+            base_url: "https://reload-fixture.invalid/v1".into(),
             models: vec![],
             enabled,
         }],
@@ -1984,11 +1986,11 @@ fn artifact_content_at(wb: &Workbench, path: &str, version: i64) -> Result<Optio
 }
 
 fn agent_avatar(wb: &Workbench, agent_id: &str) -> Result<Option<String>, String> {
-    crate::roles::agent_avatar(&wb.repo_root, agent_id).map_err(|e| e.to_string())
+    crate::avatars::agent_avatar(&wb.db, &wb.repo_root, agent_id).map_err(|e| e.to_string())
 }
 
 fn set_agent_avatar(wb: &Workbench, agent_id: &str, data_url: &str) -> Result<(), String> {
-    crate::roles::set_agent_avatar(&wb.repo_root, agent_id, data_url).map_err(|e| e.to_string())
+    crate::avatars::set_agent_avatar(&wb.repo_root, agent_id, data_url).map_err(|e| e.to_string())
 }
 
 fn agent_detail(wb: &Workbench, agent_id: &str) -> Result<Value, String> {
@@ -2360,9 +2362,7 @@ fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
         assert_eq!(owners[0].event.payload["stage"], "合入");
         assert_ne!(owners[0].event.payload["by"], "autonomy");
         assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
-        assert!(tl
-            .iter()
-            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::PushConfirmed));
     }
 }
 
@@ -2566,9 +2566,7 @@ fn fastpath_l3_l4_does_not_auto_merge_baseline() {
         );
         let tl = timeline(&wb, None, 40).unwrap();
         assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
-        assert!(tl
-            .iter()
-            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::PushConfirmed));
         assert!(
             crate::git::run(
                 dir.path(),
@@ -2809,26 +2807,26 @@ fn coordinator_low_rank_cannot_release_restricted_permissions() {
     }
 }
 
-/// 票 03 / ADR 0034：远程发布不搭安全网的顺风车。L0–L4 都只入队，不推、不放行。
+/// 票 03 / ADR 0034：推送（原远程发布，ADR 0093）不搭安全网的顺风车。L0–L4 都只入队，不推、不放行。
 #[test]
-fn remote_publish_waits_for_human_at_every_level() {
+fn push_waits_for_human_at_every_level() {
     for lv in ["L0", "L1", "L2", "L3", "L4"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
-        let qid = wb.request_publish("origin").unwrap();
+        let qid = wb.request_push("origin").unwrap().question_id;
         let pend = pending_questions(&wb).unwrap();
         let card = pend.iter().find(|c| c["id"] == qid).expect(lv);
-        assert_eq!(card["kind"], "publish", "{lv}");
+        assert_eq!(card["kind"], "push", "{lv}");
         assert_eq!(card["state"], "queued", "{lv}");
         assert!(
-            events(&wb, Some(&[EventKind::PublishConfirmed]))
+            events(&wb, Some(&[EventKind::PushConfirmed]))
                 .unwrap()
                 .is_empty(),
             "{lv}"
         );
         assert_eq!(
-            events(&wb, Some(&[EventKind::PublishRequested]))
+            events(&wb, Some(&[EventKind::PushRequested]))
                 .unwrap()
                 .len(),
             1,
@@ -2838,7 +2836,7 @@ fn remote_publish_waits_for_human_at_every_level() {
             events(&wb, Some(&[EventKind::PermissionAllowed]))
                 .unwrap()
                 .is_empty(),
-            "{lv} publish must not look like a safety-net release"
+            "{lv} push must not look like a safety-net release"
         );
     }
 }
@@ -3732,61 +3730,263 @@ fn pending_questions_filters_answered_and_reject_at_stamp() {
     assert_eq!(qs.len(), 1);
     assert_eq!(qs[0]["id"], qb);
 }
+/// 票 17 测试图：w×h，中心 min(w,h) 见方涂红、两侧涂蓝，按 `fmt` 编码成 data URL。
+fn avatar_url(w: u32, h: u32, fmt: image::ImageFormat) -> String {
+    use base64::Engine;
+    let side = w.min(h);
+    let (x0, y0) = ((w - side) / 2, (h - side) / 2);
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        let inside = x >= x0 && x < x0 + side && y >= y0 && y < y0 + side;
+        if inside {
+            image::Rgb([255, 0, 0])
+        } else {
+            image::Rgb([0, 0, 255])
+        }
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut out, fmt)
+        .unwrap();
+    let mime = match fmt {
+        image::ImageFormat::Jpeg => "image/jpeg",
+        _ => "image/png",
+    };
+    format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    )
+}
+
+fn decode_url(url: &str) -> image::DynamicImage {
+    use base64::Engine;
+    let b64 = url.split_once(";base64,").unwrap().1;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .unwrap();
+    image::load_from_memory(&bytes).unwrap()
+}
+
 #[test]
 fn avatar_roundtrip_and_ext_switch() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
     let aid = "a0";
     assert!(agent_avatar(&wb, aid).unwrap().is_none());
-    // 伪 PNG：若干字节即可，读写只认 data URL 包装
-    use base64::Engine;
-    let url = format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(b"fakepng")
-    );
+    // 正方形原样保存（字节与格式不变）
+    let url = avatar_url(8, 8, image::ImageFormat::Png);
     set_agent_avatar(&wb, aid, &url).unwrap();
     assert_eq!(agent_avatar(&wb, aid).unwrap().unwrap(), url);
     assert!(dir.path().join(".hexagon/avatars/a0.png").exists());
     // 换 jpg：旧 png 应被清掉
-    let url2 = format!(
-        "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(b"fakejpg")
-    );
+    let url2 = avatar_url(8, 8, image::ImageFormat::Jpeg);
     set_agent_avatar(&wb, aid, &url2).unwrap();
     assert_eq!(agent_avatar(&wb, aid).unwrap().unwrap(), url2);
     assert!(!dir.path().join(".hexagon/avatars/a0.png").exists());
 }
 
-/// 票 07：team 行随行下发 avatar_hash——无头像 None，写入后哈希出现，
-/// 改图后哈希变（UI 据此决定要不要重拉 data URL）。
+/// 票 17：读取优先级 实例覆盖 > 角色头像 > 默认（None）。角色图一张，同角色全部实例生效；
+/// 实例覆盖只改自己；实例层恢复默认露出角色图；角色层恢复默认回到色块。
 #[test]
-fn team_row_carries_avatar_hash() {
+fn avatar_two_layer_priority_and_restore_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端", "后端", "前端"], None).unwrap();
+    let root = wb.repo_root.clone();
+    let role_url = avatar_url(6, 6, image::ImageFormat::Png);
+    crate::avatars::set_role_avatar(&root, "后端", &role_url).unwrap();
+    assert_eq!(
+        crate::avatars::role_avatar(&root, "后端")
+            .unwrap()
+            .as_deref(),
+        Some(role_url.as_str())
+    );
+    assert_eq!(
+        agent_avatar(&wb, "a0").unwrap().as_deref(),
+        Some(role_url.as_str())
+    );
+    assert_eq!(
+        agent_avatar(&wb, "a1").unwrap().as_deref(),
+        Some(role_url.as_str())
+    );
+    assert_eq!(agent_avatar(&wb, "a2").unwrap(), None, "别的角色不受影响");
+
+    let own = avatar_url(4, 4, image::ImageFormat::Png);
+    set_agent_avatar(&wb, "a1", &own).unwrap();
+    assert_eq!(
+        agent_avatar(&wb, "a1").unwrap().as_deref(),
+        Some(own.as_str())
+    );
+    assert_eq!(
+        agent_avatar(&wb, "a0").unwrap().as_deref(),
+        Some(role_url.as_str())
+    );
+
+    crate::avatars::clear_agent_avatar(&root, "a1").unwrap();
+    assert_eq!(
+        agent_avatar(&wb, "a1").unwrap().as_deref(),
+        Some(role_url.as_str())
+    );
+
+    crate::avatars::clear_role_avatar(&root, "后端").unwrap();
+    assert_eq!(agent_avatar(&wb, "a0").unwrap(), None);
+    assert_eq!(crate::avatars::role_avatar(&root, "后端").unwrap(), None);
+    // 已经是默认时再恢复不报错
+    crate::avatars::clear_role_avatar(&root, "后端").unwrap();
+    crate::avatars::clear_agent_avatar(&root, "a0").unwrap();
+}
+
+/// 票 17：升级前按实例存的头像（`.hexagon/avatars/<agent>.<ext>`）原地成为实例覆盖，
+/// 压过之后设的角色头像。
+#[test]
+fn legacy_instance_avatar_survives_as_override() {
+    use base64::Engine;
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
-    let hash_of = || {
-        orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)
+    let legacy = avatar_url(5, 5, image::ImageFormat::Png);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(legacy.split_once(";base64,").unwrap().1)
+        .unwrap();
+    std::fs::create_dir_all(dir.path().join(".hexagon/avatars")).unwrap();
+    std::fs::write(dir.path().join(".hexagon/avatars/a0.png"), bytes).unwrap();
+    crate::avatars::set_role_avatar(
+        &wb.repo_root,
+        "后端",
+        &avatar_url(6, 6, image::ImageFormat::Png),
+    )
+    .unwrap();
+    assert_eq!(
+        agent_avatar(&wb, "a0").unwrap().as_deref(),
+        Some(legacy.as_str())
+    );
+    let row = orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == "a0")
+        .unwrap();
+    assert!(row.avatar_override);
+}
+
+/// 票 17：非正方形按中心裁方（横图、竖图、jpeg 都是），结果是正方形 PNG 且只剩中心色。
+#[test]
+fn avatar_write_center_crops_to_square() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    for (w, h, fmt) in [
+        (30, 10, image::ImageFormat::Png),
+        (10, 31, image::ImageFormat::Png),
+        (40, 16, image::ImageFormat::Jpeg),
+    ] {
+        crate::avatars::set_role_avatar(&wb.repo_root, "后端", &avatar_url(w, h, fmt)).unwrap();
+        let got = crate::avatars::role_avatar(&wb.repo_root, "后端")
             .unwrap()
-            .into_iter()
-            .find(|r| r.id == "a0")
-            .unwrap()
-            .avatar_hash
-    };
-    assert_eq!(hash_of(), None);
+            .unwrap();
+        assert!(got.starts_with("data:image/png;base64,"), "{w}x{h}");
+        let img = decode_url(&got).to_rgb8();
+        let side = w.min(h);
+        assert_eq!((img.width(), img.height()), (side, side));
+        // 角点与中心都应是红色（jpeg 有损，容差判主色）
+        for (x, y) in [(1, 1), (side - 2, side - 2), (side / 2, side / 2)] {
+            let p = img.get_pixel(x, y).0;
+            assert!(p[0] > 150 && p[2] < 100, "{w}x{h} @({x},{y}) = {p:?}");
+        }
+    }
+}
+
+/// 票 17：>2MB 拒（错误码 avatar_too_large）；不是图片的字节拒（avatar_unreadable）；
+/// 拒绝时不动已存的图。
+#[test]
+fn avatar_write_rejects_oversize_and_non_images() {
+    use crate::errcode::ErrorCode;
     use base64::Engine;
-    let url = format!(
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    let good = avatar_url(6, 6, image::ImageFormat::Png);
+    set_agent_avatar(&wb, "a0", &good).unwrap();
+    let big = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD
+            .encode(vec![0u8; crate::avatars::MAX_AVATAR_BYTES + 1])
+    );
+    let e = crate::avatars::set_agent_avatar(&wb.repo_root, "a0", &big).unwrap_err();
+    assert_eq!(e.code(), "avatar_too_large");
+    let e = crate::avatars::set_role_avatar(&wb.repo_root, "后端", &big).unwrap_err();
+    assert_eq!(e.code(), "avatar_too_large");
+    let junk = format!(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(b"fakepng")
     );
-    set_agent_avatar(&wb, "a0", &url).unwrap();
-    let h1 = hash_of().unwrap();
-    let url2 = format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(b"fakepng-v2")
+    let e = crate::avatars::set_agent_avatar(&wb.repo_root, "a0", &junk).unwrap_err();
+    assert_eq!(e.code(), "avatar_unreadable");
+    let e = crate::avatars::set_agent_avatar(&wb.repo_root, "a0", "not a data url").unwrap_err();
+    assert_eq!(e.code(), "avatar_unreadable");
+    assert_eq!(
+        agent_avatar(&wb, "a0").unwrap().as_deref(),
+        Some(good.as_str())
     );
-    set_agent_avatar(&wb, "a0", &url2).unwrap();
-    let h2 = hash_of().unwrap();
-    assert_ne!(h1, h2);
+    // 穿目录的 id 拒
+    let e = crate::avatars::set_agent_avatar(&wb.repo_root, "../x", &good).unwrap_err();
+    assert_eq!(e.code(), "bad_agent_id");
 }
+
+/// 票 07 / 17：team 行随行下发生效头像哈希——无头像 None，写入后哈希出现，
+/// 改图后哈希变；角色图变化让该角色每个实例的行哈希都变（UI 据此重拉）。
+#[test]
+fn team_row_carries_avatar_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端", "后端"], None).unwrap();
+    let row = |id: &str| {
+        orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap()
+    };
+    let png = |n: u32| avatar_url(n, n, image::ImageFormat::Png);
+    assert_eq!(row("a0").avatar_hash, None);
+    assert!(!row("a0").avatar_override);
+    set_agent_avatar(&wb, "a0", &png(6)).unwrap();
+    let h1 = row("a0").avatar_hash.unwrap();
+    assert!(row("a0").avatar_override);
+    set_agent_avatar(&wb, "a0", &png(7)).unwrap();
+    let h2 = row("a0").avatar_hash.unwrap();
+    assert_ne!(h1, h2);
+
+    assert_eq!(row("a1").avatar_hash, None);
+    crate::avatars::set_role_avatar(&wb.repo_root, "后端", &png(8)).unwrap();
+    let r1 = row("a1").avatar_hash.unwrap();
+    assert!(!row("a1").avatar_override);
+    assert_eq!(row("a0").avatar_hash.unwrap(), h2, "覆盖压过角色图");
+    crate::avatars::set_role_avatar(&wb.repo_root, "后端", &png(9)).unwrap();
+    assert_ne!(row("a1").avatar_hash.unwrap(), r1);
+    // 实例恢复默认：a0 露出角色图，哈希与 a1 同
+    crate::avatars::clear_agent_avatar(&wb.repo_root, "a0").unwrap();
+    assert_eq!(row("a0").avatar_hash, row("a1").avatar_hash);
+    assert!(!row("a0").avatar_override);
+}
+
+/// 票 17：向导一批角色头像先整单规整，有一张不合格就整单拒（建项目前调用，什么都没写）。
+#[test]
+fn wizard_role_avatars_prepare_all_or_nothing() {
+    use crate::avatars::RoleAvatar;
+    use crate::errcode::ErrorCode;
+    let ok = RoleAvatar {
+        role: "后端".into(),
+        data_url: avatar_url(20, 10, image::ImageFormat::Png),
+    };
+    let bad = RoleAvatar {
+        role: "前端".into(),
+        data_url: "data:image/png;base64,AAAA".into(),
+    };
+    let e = crate::avatars::prepare_role_avatars(&[ok.clone(), bad]).unwrap_err();
+    assert_eq!(e.code(), "avatar_unreadable");
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    for (role, n) in crate::avatars::prepare_role_avatars(&[ok]).unwrap() {
+        crate::avatars::write_role(&wb.repo_root, &role, &n).unwrap();
+    }
+    let img = decode_url(&agent_avatar(&wb, "a0").unwrap().unwrap());
+    assert_eq!((img.width(), img.height()), (10, 10));
+}
+
 #[test]
 fn artifact_content_at_reads_each_version() {
     let dir = tempfile::tempdir().unwrap();
@@ -6272,9 +6472,9 @@ fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
         &wb,
         Some(&[
             EventKind::TurnStarted,
-            EventKind::PublishRequested,
-            EventKind::PublishConfirmed,
-            EventKind::PublishFailed,
+            EventKind::PushRequested,
+            EventKind::PushConfirmed,
+            EventKind::PushFailed,
         ])
     )
     .unwrap()
@@ -16322,7 +16522,7 @@ fn experience_native_publish_fixture_requires_explicit_publication_action() {
         &wb.db,
         &wb.project_id,
         Some("a0"),
-        crate::cards::CardKind::Publish,
+        crate::cards::CardKind::Push,
         json!({"summary":"Native publish shortcut guard", "path":"reviewed.txt"}),
         None,
     )
@@ -20353,8 +20553,8 @@ fn qa14_project_probes_refuse_state_aliases_and_preserve_live_lock() {
                 assert!(crate::setup::read_instruction_file(dir.path()).is_err());
             }
             ".hexagon/avatars/a0.png" => {
-                assert!(crate::roles::agent_avatar(dir.path(), "a0").is_err());
-                assert!(crate::roles::avatar_hash(dir.path(), "a0").is_err());
+                assert!(crate::avatars::instance_avatar(dir.path(), "a0").is_err());
+                assert!(crate::avatars::avatar_state(dir.path(), "a0", "后端").is_err());
             }
             _ => {
                 assert!(crate::orchestra::PackDef::load(&alias).is_err());

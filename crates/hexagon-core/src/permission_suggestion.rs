@@ -13,8 +13,17 @@ pub struct PermissionShapeSuggestion {
     pub agent_id: String,
 }
 
-pub(crate) fn suggest(tool: &str, input: &Value) -> Option<(String, bool)> {
-    if crate::permissions::is_safety_net(tool, input).is_some() || tool.starts_with("mcp:") {
+/// The suggested remember shape. `push` is the decision's push classification
+/// (ticket 33 S8 / P1, 2026-10-25 review): the remember key of a resolved
+/// implicit-target push is its resolved (remote, branch).
+pub(crate) fn suggest_with(
+    tool: &str,
+    input: &Value,
+    push: &crate::push_class::PushClass,
+) -> Option<(String, bool)> {
+    if crate::permissions::is_safety_net_with(tool, input, push).is_some()
+        || tool.starts_with("mcp:")
+    {
         return None;
     }
     let target = match tool {
@@ -27,6 +36,14 @@ pub(crate) fn suggest(tool: &str, input: &Value) -> Option<(String, bool)> {
     };
     if target.is_empty() {
         return None;
+    }
+    // owner-followups-1015 #13: an ordinary push is remembered by (remote,
+    // branch) — the same key the owner's ⌘K push card records. Force pushes
+    // never get here (safety net above).
+    if tool == "bash" {
+        if let crate::push_class::PushClass::Ordinary(t) = push {
+            return Some((crate::permissions::push_shape(&t.remote, &t.branch), true));
+        }
     }
     let candidate = match tool {
         "web_fetch" => {
@@ -65,10 +82,10 @@ pub(crate) fn suggest(tool: &str, input: &Value) -> Option<(String, bool)> {
         }
     };
     if let Some(shape) = candidate {
-        if crate::permissions::shape_matches(&shape, tool, input) {
+        if crate::permissions::shape_matches_with(&shape, tool, input, push) {
             return Some((shape, true));
         }
     }
     let exact = format!("exact:{target}");
-    crate::permissions::shape_matches(&exact, tool, input).then_some((exact, false))
+    crate::permissions::shape_matches_with(&exact, tool, input, push).then_some((exact, false))
 }

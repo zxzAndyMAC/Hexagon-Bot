@@ -7,7 +7,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const fillVariants = cva("block h-full rounded-[inherit] transition-[width] duration-150 ease-hx", {
-  variants: { tone: { ink: "bg-ink", accent: "bg-primary", warn: "bg-orange", cap: "bg-red" } },
+  variants: { tone: { ink: "bg-ink", accent: "bg-(--accent)", warn: "bg-orange", cap: "bg-red" } },
   defaultVariants: { tone: "ink" },
 })
 

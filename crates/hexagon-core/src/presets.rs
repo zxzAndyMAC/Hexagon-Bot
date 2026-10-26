@@ -144,6 +144,70 @@ pub fn preset_roles() -> Result<Vec<RoleDef>, PresetError> {
     Ok(roles)
 }
 
+const HIDDEN_ROLES_JSON: &str = include_str!("../presets/hidden_roles.json");
+
+/// 隐藏预置角色（owner-followups-1015 票 19，`CONTEXT.md`「画师」）：带隐藏标记，
+/// 只在被召唤时出场。与 [`preset_roles`] 分文件存放——向导、设置团队、角色库、
+/// 流程包校验都读 `preset_roles`，隐藏角色在结构上进不了这些读面。
+/// 被否决：给 `RoleDef` 加 `hidden` 字段再让每个读面过滤——漏一处过滤
+/// 画师就出现在花名册 / @ 菜单里（假阴性 = 彩蛋提前露面），分文件没有可漏的过滤点。
+#[derive(Debug, Clone, Deserialize)]
+pub struct HiddenRoleDef {
+    /// 代码名（`artist`）；界面与轨迹用 `role.name`。
+    pub code: String,
+    /// 隐藏标记。载入时必须为 true——文件里写 false 是配错，不是「公开角色」。
+    pub hidden: bool,
+    #[serde(flatten)]
+    pub role: RoleDef,
+}
+
+pub fn hidden_roles() -> Result<Vec<HiddenRoleDef>, PresetError> {
+    let roles: Vec<HiddenRoleDef> =
+        serde_json::from_str(HIDDEN_ROLES_JSON).map_err(|src| PresetError::Json {
+            file: "hidden_roles.json",
+            src,
+        })?;
+    let visible = preset_roles()?;
+    for r in &roles {
+        if !r.hidden || visible.iter().any(|v| v.name == r.role.name) {
+            return Err(PresetError::DuplicateRole(r.role.name.clone()));
+        }
+        for s in &r.role.skills {
+            if hidden_skill_doc(s).is_none() {
+                return Err(PresetError::UnknownSkill {
+                    role: r.role.name.clone(),
+                    skill: s.clone(),
+                });
+            }
+        }
+    }
+    Ok(roles)
+}
+
+/// 隐藏角色专用的内置技能（owner-followups-1015 票 28：画师的「出图提示词」）。
+/// 不进 [`SKILL_FILES`]：那张表是技能加载器的内置层，所有角色的技能目录、`search_skills`
+/// 与设置·技能页都读它——放进去 = 每个 Agent 都能发现并加载画师的技能，彩蛋在目录里露面。
+/// 与 [`hidden_roles`] 分文件同一条理由：分开存放没有可漏的过滤点。
+const HIDDEN_SKILL_FILES: &[(&str, &str)] = &[(
+    "image-prompt",
+    include_str!("../presets/hidden_skills/image-prompt/SKILL.md"),
+)];
+
+/// 隐藏技能名 → SKILL.md 原文。
+pub fn hidden_skill_doc(name: &str) -> Option<&'static str> {
+    HIDDEN_SKILL_FILES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, d)| *d)
+}
+
+/// 角色名是否属于隐藏预置角色。
+pub fn is_hidden_role(name: &str) -> bool {
+    hidden_roles()
+        .map(|roles| roles.iter().any(|r| r.role.name == name))
+        .unwrap_or(false)
+}
+
 /// 四预置流程包（载入即校验，角色名单以预置角色为准）。
 pub fn preset_packs() -> Result<Vec<PackDef>, PresetError> {
     let known: Vec<String> = preset_roles()?.iter().map(|r| r.name.clone()).collect();

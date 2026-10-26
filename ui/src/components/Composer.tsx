@@ -16,14 +16,17 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
-import { COMPOSER_FILL_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
+import { COMPOSER_FILL_EVENT, COMPOSER_MENTION_EVENT, COMPOSER_PATH_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
 import { visiblePending } from '../decisions'
 import type { AttachRef } from '../gen/AttachRef'
+import { ProjectFileMenu } from './FileMenu'
 import {
   atomicDeletion,
   findAtoms,
   insertPathToken,
+  mentionName as mentionNameOf,
   mentionTokenText,
+  insertToken,
   pathFromTreeDrag,
   pathTokenText,
   TREE_DRAG_MIME,
@@ -117,8 +120,7 @@ export function Composer() {
   const pathTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // reliability 07: duplicate roles need stable instance tokens; a role label
   // alone previously sent both menu entries to the first agent.
-  const mentionName = (m: typeof team[number]) => team.filter((peer) => peer.role === m.role).length > 1
-    ? `${m.role}[${m.id}]` : m.role
+  const mentionName = (m: typeof team[number]) => mentionNameOf(m, team)
   const roster = useMemo(() => new Set(team.flatMap((m) => [m.role, `${m.role}[${m.id}]`])), [team])
   const atoms = useMemo(() => findAtoms(text, roster), [text, roster])
 
@@ -328,6 +330,25 @@ export function Composer() {
     return () => window.removeEventListener(COMPOSER_FILL_EVENT, onFill)
   }, [])
 
+  // owner-followups-1015 #08：成员行右键「@ 点名」——未聚焦插到文末，聚焦插在光标处（同拖入路径块的口径）。
+  useEffect(() => {
+    const onMention = (e: Event) => {
+      const token = (e as CustomEvent<unknown>).detail
+      if (typeof token !== 'string' || !token) return
+      const ta = inputRef.current
+      const caret = ta && document.activeElement === ta ? ta.selectionStart : null
+      setText((draft) => {
+        const next = insertToken(draft, caret ?? draft.length, token)
+        pendingCaret.current = next.caret
+        return next.text
+      })
+      setHistIdx(-1)
+      setPopup(null)
+    }
+    window.addEventListener(COMPOSER_MENTION_EVENT, onMention)
+    return () => window.removeEventListener(COMPOSER_MENTION_EVENT, onMention)
+  }, [])
+
   // 票 12：未聚焦时插到文末（拖进来的人多半没把光标点在半截词上）。
   // 聚焦时插在光标处，并补收束空格，使这块和手打路径用同一次退格删掉。
   const insertDroppedPath = (path: string) => {
@@ -338,6 +359,17 @@ export function Composer() {
     commitText(next.text, next.caret)
     ta?.focus()
   }
+  // owner-followups-1015 #07：文件树右键「插入到输入条」与拖入同一条插入（监听只挂一次，经 ref 读最新草稿）。
+  const insertPathRef = useRef(insertDroppedPath)
+  useEffect(() => { insertPathRef.current = insertDroppedPath })
+  useEffect(() => {
+    const onPath = (e: Event) => {
+      const path = (e as CustomEvent<unknown>).detail
+      if (typeof path === 'string' && path) insertPathRef.current(path)
+    }
+    window.addEventListener(COMPOSER_PATH_EVENT, onPath)
+    return () => window.removeEventListener(COMPOSER_PATH_EVENT, onPath)
+  }, [])
 
   const mentionIds = team.filter((member) => atoms.some((atom) => atom.kind === 'mention'
     && (atom.value === member.role || atom.value === `${member.role}[${member.id}]`))).map((member) => member.id)
@@ -388,7 +420,9 @@ export function Composer() {
         {(attachments.length > 0 || list) && (
           <div className="composer-refs">
             {attachments.map((a) => (
-              <div key={a.path} className="attach-chip">
+              // #32：右键 = 文件菜单（复制路径 · 在访达中显示 · 打开方式）；已在输入条里，不给「插入」，也没有「打开」（点缩略图 = 放大）
+              <ProjectFileMenu key={a.path} path={a.path} noInsert>
+              <div data-attach-path={a.path} className="attach-chip">
                 <button type="button" className="attach-thumb" aria-label={t('composer.imageZoom', { name: a.name })} onClick={() => setZoom(a)}>
                   <img src={a.preview} alt={a.name} />
                 </button>
@@ -396,6 +430,7 @@ export function Composer() {
                   <Icon name="close" size={12} />
                 </button>
               </div>
+              </ProjectFileMenu>
             ))}
             {list}
           </div>

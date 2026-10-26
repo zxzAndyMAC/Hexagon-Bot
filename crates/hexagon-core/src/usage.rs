@@ -541,6 +541,68 @@ pub fn record_tools(
     Ok(())
 }
 
+/// 画师出图的账（owner-followups-1015 票 20，规格用户故事 72「用量记在画师名下」）。
+/// 画师不是 agents 表成员（票 19：团队读面结构上看不到它），`usage.agent_id` 外键指 agents，
+/// 所以行上 agent_id 为 NULL、`purpose` 标 [`ARTIST_PURPOSE`]；汇总读面把它归到
+/// [`ARTIST_ACTOR`] 名下（[`ACTOR_SQL`]）。被否决：给画师插一行隐藏 agents——每个团队读面
+/// 都得记得滤掉它，漏一处画师就出现在花名册里。
+pub const ARTIST_PURPOSE: &str = "artist_image";
+/// 汇总读面上画师的归属键（= 画师代码名 `artist::ARTIST_CODE`）。
+pub const ARTIST_ACTOR: &str = "artist";
+/// 汇总读面的归属列：Agent 行照旧，画师出图行与写提示词行（票 28，
+/// `artist_prompt::PROMPT_PURPOSE`，主对话槽）归 `artist`。
+const ACTOR_SQL: &str = "COALESCE(u.agent_id, CASE WHEN u.purpose IN ('artist_image','artist_prompt') THEN 'artist' END)";
+
+/// 记一次出图请求。价格按 `image` 槽查 `.hexagon/prices.json`；供应商不报 token
+/// （dall-e 系）或没定价 → 未知费用，不当免费（Reliability 12 同口径）。
+pub fn record_artist_image(
+    db: &Db,
+    repo_root: &std::path::Path,
+    project_id: &str,
+    stage_run_id: Option<&str>,
+    actual_model: &str,
+    ok: bool,
+    tokens: Option<(u64, u64)>,
+) -> Result<(), rusqlite::Error> {
+    let slot = crate::provider_config::IMAGE_SLOT;
+    let usage = tokens.map(|(p, c)| Usage {
+        prompt_tokens: p,
+        completion_tokens: c,
+        prompt_reported: true,
+        completion_reported: true,
+        ..Default::default()
+    });
+    let cost = usage
+        .as_ref()
+        .and_then(|u| price_for(repo_root, slot).and_then(|p| cost_for(p, u)));
+    let id = format!(
+        "request{}",
+        db.next_id("model_request")
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    );
+    db.conn().execute(
+        "INSERT INTO usage(project_id,agent_id,model,prompt_tokens,completion_tokens,tool_output_tokens,
+            cost_millicents,stage_run_id,record_kind,request_id,purpose,request_state,cost_known,
+            actual_model,prompt_known,completion_known)
+         VALUES (?1,NULL,?2,?3,?4,0,?5,?6,'request',?7,?8,?9,?10,?11,?12,?12)",
+        params![
+            project_id,
+            slot,
+            tokens.map_or(0, |t| t.0.min(i64::MAX as u64) as i64),
+            tokens.map_or(0, |t| t.1.min(i64::MAX as u64) as i64),
+            cost.unwrap_or(0),
+            stage_run_id,
+            id,
+            ARTIST_PURPOSE,
+            if ok { "succeeded" } else { "failed" },
+            cost.is_some(),
+            actual_model,
+            tokens.is_some(),
+        ],
+    )?;
+    Ok(())
+}
+
 /// 项目已花费（毫分）。
 pub fn spent_mc(db: &Db, project_id: &str) -> Result<i64, rusqlite::Error> {
     db.conn().query_row(
@@ -681,7 +743,7 @@ pub fn summarize_range(
     to: Option<&str>,
 ) -> Result<Vec<UsageRow>, rusqlite::Error> {
     let mut st = db.conn().prepare(
-        "SELECT u.agent_id, u.model, sr.stage_name,
+        &format!("SELECT {ACTOR_SQL}, u.model, sr.stage_name,
                 SUM(u.prompt_tokens), SUM(u.completion_tokens),
                 SUM(u.tool_output_tokens), SUM(u.cost_millicents),
                 SUM(u.record_kind='request' AND u.request_state!='not_sent'),
@@ -692,8 +754,8 @@ pub fn summarize_range(
          WHERE u.project_id=?1
            AND (?2 IS NULL OR u.created_at >= ?2)
            AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
-         GROUP BY u.agent_id, u.model, u.stage_run_id
-         ORDER BY SUM(u.cost_millicents) DESC",
+         GROUP BY 1, u.model, u.stage_run_id
+         ORDER BY SUM(u.cost_millicents) DESC"),
     )?;
     let rows = st
         .query_map(params![project_id, from, to], |r| {
@@ -800,14 +862,14 @@ pub fn series(
         "date(u.created_at)"
     };
     let sql = format!(
-        "SELECT {bucket}, u.agent_id,
+        "SELECT {bucket}, {ACTOR_SQL},
                 SUM(u.prompt_tokens), SUM(u.completion_tokens),
                 SUM(u.tool_output_tokens), SUM(u.cost_millicents)
          FROM usage u
          WHERE u.project_id=?1
            AND (?2 IS NULL OR u.created_at >= ?2)
            AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
-         GROUP BY 1, u.agent_id ORDER BY 1"
+         GROUP BY 1, 2 ORDER BY 1"
     );
     let mut st = db.conn().prepare(&sql)?;
     let rows = st

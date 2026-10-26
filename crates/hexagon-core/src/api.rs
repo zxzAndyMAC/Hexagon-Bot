@@ -21,6 +21,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 mod permission_control;
+mod release;
+#[cfg(test)]
+mod release_chat_tests;
+mod release_targets;
+#[cfg(test)]
+mod release_targets_tests;
+#[cfg(test)]
+mod release_tests;
 mod session_resume;
 mod session_schedule;
 mod session_worktree;
@@ -172,7 +180,11 @@ pub enum ApiError {
     #[error(transparent)]
     Artifact(#[from] crate::artifacts::ArtifactError),
     #[error(transparent)]
-    Publish(#[from] crate::publish::PublishError),
+    Push(#[from] crate::push::PushError),
+    #[error(transparent)]
+    Release(#[from] crate::release_targets::ReleaseError),
+    #[error(transparent)]
+    ReleaseRun(#[from] crate::release::ReleaseRunError),
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error(transparent)]
@@ -1338,9 +1350,15 @@ impl Workbench {
         Ok(())
     }
 
-    /// 发起远程发布：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
-    pub fn request_publish(&self, remote: &str) -> Result<String, ApiError> {
-        Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
+    /// 发起推送（原「远程发布」，ADR 0093）：入队确认卡。任何自治档都不自动放行（票 03 / ADR 0034）；
+    /// 唯一的免卡路径是负责人自己在推送卡上「允许本项目」过同一（远程, 分支）（#13）。
+    pub fn request_push(&self, remote: &str) -> Result<crate::push::PushRequest, ApiError> {
+        Ok(crate::push::request_or_push(
+            &self.db,
+            &self.project_id,
+            remote,
+            self.creds.as_ref(),
+        )?)
     }
 
     /// 自然语言安装：所有模式先确认解析后的新能力方案。
@@ -1601,14 +1619,24 @@ impl Workbench {
         )?)
     }
 
-    /// 确认发布：凭据闸 + push。
-    pub fn confirm_publish(&self, qid: &str) -> Result<crate::publish::PublishOutcome, ApiError> {
-        Ok(crate::publish::confirm(
-            &self.db,
-            &self.project_id,
-            qid,
-            self.creds.as_ref(),
-        )?)
+    /// 确认推送：凭据闸 + push。`remember` = 推送卡上的「允许本项目」（#13）：
+    /// 记（远程, 基线分支），之后 ⌘K 与 Agent 终端推送同一目标不再问。
+    pub fn confirm_push(
+        &self,
+        qid: &str,
+        remember: bool,
+    ) -> Result<crate::push::PushOutcome, ApiError> {
+        let store = self.creds.as_ref();
+        Ok(if remember {
+            crate::push::confirm_remembering(&self.db, &self.project_id, qid, store)?
+        } else {
+            crate::push::confirm(&self.db, &self.project_id, qid, store)?
+        })
+    }
+
+    /// ⌘K「推送」的目标候选：基线上游远程 + 已配置远程（#13）。
+    pub fn push_targets(&self) -> Result<crate::push::PushTargets, ApiError> {
+        Ok(crate::push::targets(&self.db, &self.project_id)?)
     }
 
     /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
@@ -1860,6 +1888,22 @@ impl Workbench {
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
+            // 票 28：画师写提示词的主对话模型 = 画师模型槽经 resolve_slot 解析（与回合同一回退链）。
+            images: Some(
+                crate::image_gen::ImageAccess::new(self.creds.clone()).with_prompt_model({
+                    let slot = crate::artist::artist_chat_slot();
+                    crate::provider_config::resolve_slot(&self.providers, slot).map(|p| {
+                        crate::image_gen::PromptModel {
+                            slot: slot.to_string(),
+                            provider: p.clone(),
+                            fell_back: crate::provider_config::fell_back_to_default(
+                                &self.providers,
+                                slot,
+                            ),
+                        }
+                    })
+                }),
+            ),
             embedder: self.embedder.clone(),
             subagent_provider: None,
             reads: Default::default(),
@@ -4939,6 +4983,10 @@ pub fn data_boundary(
 }
 
 #[cfg(test)]
+mod artist_image_tests;
+#[cfg(test)]
+mod artist_tests;
+#[cfg(test)]
 mod model_recovery_tests;
 #[cfg(test)]
 mod session_runtime_tests;
@@ -5360,10 +5408,17 @@ pub fn permission_shape_suggestion(
     if !card.payload["input"].is_null() && card.payload["input"][target_key] != input[target_key] {
         return Ok(None);
     }
+    // Ticket 33 P1: no repo here; a resolved implicit-target push takes the target the
+    // host recorded at ask time (push_class::from_card), everything else re-reads the bytes.
+    let push = if tool == "bash" {
+        crate::push_class::from_card(input["cmd"].as_str().unwrap_or(""), &card.payload["push"])
+    } else {
+        crate::push_class::PushClass::NotPush
+    };
     let proposal = if card.payload["safety_net"] == true {
         None
     } else {
-        crate::permission_suggestion::suggest(tool, input)
+        crate::permission_suggestion::suggest_with(tool, input, &push)
     };
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
@@ -5392,6 +5447,8 @@ pub fn permission_shape_suggestion(
 }
 #[cfg(test)]
 mod permission_suggestion_tests;
+#[cfg(test)]
+mod push_card_tests;
 
 #[cfg(test)]
 mod quality_tests;

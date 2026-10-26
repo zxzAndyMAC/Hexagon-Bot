@@ -73,6 +73,22 @@ export type ActionId =
   | 'canvasFullWidth'
   | 'focusMode'
   | 'closeTab'
+  | 'closeOtherTabs'
+  | 'closeTabsToRight'
+  | 'copyMessage'
+  | 'quoteMessage'
+  | 'locateInRail'
+  | 'mentionMember'
+  | 'openMemberDetail'
+  | 'copyMemberName'
+  | 'changeMemberAvatar'
+  | 'restoreMemberAvatar'
+  | 'nextTab'
+  | 'prevTab'
+  | 'copyPath'
+  | 'insertPath'
+  | 'revealPath'
+  | 'openWith'
   | 'settings'
   | 'focusComposer'
   | 'stageRewind'
@@ -215,6 +231,23 @@ const DEFAULTS: Record<ActionId, string> = {
   focusMode: 'mod+.',
   // 票 03（ADR 0088）：⌘W 关画布当前页签（时间线不再是页签）。
   closeTab: 'mod+W',
+  // owner-followups-1015 #05（A16b）：右键菜单的新动作默认不绑键位（alt+mod+shift+* 已挤满），
+  // 进命令面板与设置·键盘，负责人自己指定。作用对象 = 当前页签（右键时 = 目标页签）。
+  closeOtherTabs: '', closeTabsToRight: '', copyPath: '',
+  // owner-followups-1015 #08（A16b 成员行 / 消息）：同上默认空绑定。消息动作作用于焦点所在的消息（或选区所在的消息），
+  // 成员动作作用于焦点成员行；没有目标时什么也不做。
+  copyMessage: '', quoteMessage: '', locateInRail: '', mentionMember: '', copyMemberName: '',
+  // owner-followups-1015 #29：成员菜单「打开详情」补键位入口（2026-10-20 负责人采纳），同上默认空绑定、作用于焦点成员行。
+  openMemberDetail: '',
+  // owner-followups-1015 #18（A16b 成员行）：换头像 / 恢复默认，同上默认空绑定、作用于焦点成员行。
+  changeMemberAvatar: '', restoreMemberAvatar: '',
+  // owner-followups-1015 #07（A16b 文件树行）：同上默认空绑定；作用对象 = 焦点文件树行，否则当前文件 / 产物页签。
+  insertPath: '', revealPath: '',
+  // owner-followups-1015 #31（A16b「打开方式」）：同上默认空绑定；按下打开命令面板的「打开方式」视图，
+  // 作用对象 = 焦点文件树行，否则当前文件 / 产物页签，另列整个项目。
+  openWith: '',
+  // owner-followups-1015 #06（A22「溢出」）：页签多到滚出视区后键盘切换，同 VS Code / 浏览器的 ⌘⇧] / ⌘⇧[。
+  nextTab: 'mod+shift+]', prevTab: 'mod+shift+[',
   settings: 'mod+,',
   focusComposer: 'mod+N',
   // ADR 0056-2：阶段操作键位（alt+mod 组合避开 ⌘ 系常用位）
@@ -355,6 +388,22 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'canvasFullWidth', labelKey: 'keys.canvasFullWidth' },
   { id: 'focusMode', labelKey: 'keys.focusMode' },
   { id: 'closeTab', labelKey: 'keys.closeTab' },
+  { id: 'closeOtherTabs', labelKey: 'keys.closeOtherTabs' },
+  { id: 'closeTabsToRight', labelKey: 'keys.closeTabsToRight' },
+  { id: 'copyMessage', labelKey: 'keys.copyMessage' },
+  { id: 'quoteMessage', labelKey: 'keys.quoteMessage' },
+  { id: 'locateInRail', labelKey: 'keys.locateInRail' },
+  { id: 'openMemberDetail', labelKey: 'keys.openMemberDetail' },
+  { id: 'mentionMember', labelKey: 'keys.mentionMember' },
+  { id: 'copyMemberName', labelKey: 'keys.copyMemberName' },
+  { id: 'changeMemberAvatar', labelKey: 'keys.changeMemberAvatar' },
+  { id: 'restoreMemberAvatar', labelKey: 'keys.restoreMemberAvatar' },
+  { id: 'nextTab', labelKey: 'keys.nextTab' },
+  { id: 'prevTab', labelKey: 'keys.prevTab' },
+  { id: 'copyPath', labelKey: 'keys.copyPath' },
+  { id: 'insertPath', labelKey: 'keys.insertPath' },
+  { id: 'revealPath', labelKey: 'keys.revealPath' },
+  { id: 'openWith', labelKey: 'keys.openWith' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
   { id: 'permissionOptions', labelKey: 'projectPermission.options' },
@@ -444,6 +493,9 @@ function shortcutKey(e: KeyboardEvent | React.KeyboardEvent): string {
   if (isMac && e.metaKey && e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code)) {
     return e.code.replace(/^(Key|Digit)/, '').toLowerCase()
   }
+  // owner-followups-1015 #06：Shift 会把 [ ] 改成 { }（美式布局），按 e.key 认则 mod+shift+] 永远不命中、
+  // 设置·键盘录下的也是 mod+shift+}。方括号按物理键位还原，其余符号仍按字符认。
+  if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return e.code === 'BracketLeft' ? '[' : ']'
   return e.key === ' ' ? 'space' : e.key.length === 1 ? e.key.toLowerCase() : e.key
 }
 

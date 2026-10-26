@@ -1885,7 +1885,10 @@ pub struct TeamRow {
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
     /// 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
+    /// 票 17 起是**生效**头像（实例覆盖 > 角色头像）的哈希。
     pub avatar_hash: Option<String>,
+    /// 本实例有自己的覆盖图（票 17）：Agent 详情据此决定「恢复默认」可不可点。
+    pub avatar_override: bool,
     /// 当前模型展示名（gap B2/B6）：实例槽（空 = `default`）经 `resolve_slot` 解析。
     /// 是「现在用哪个模型」，不是某条消息当时用的模型；解析不到为 None。
     pub model: Option<String>,
@@ -1928,6 +1931,7 @@ pub fn team(
                 model_slot: r.get(2)?,
                 status: r.get(3)?,
                 avatar_hash: None,
+                avatar_override: false,
                 model: None,
                 duty: None,
                 superior: None,
@@ -1938,7 +1942,11 @@ pub fn team(
     for row in &mut rows {
         // 头像 IO 失败不炸团队接口——哈希缺席=UI 当无头像处理
         // （沿用 avatar 读路 `.catch(() => null)` 的静默降级语义）。
-        row.avatar_hash = crate::roles::avatar_hash(repo_root, &row.id).ok().flatten();
+        // 票 17：哈希取生效头像（实例覆盖 > 角色头像），角色图一换，该角色全部实例的行哈希都变。
+        let (hash, over) =
+            crate::avatars::avatar_state(repo_root, &row.id, &row.role).unwrap_or((None, false));
+        row.avatar_hash = hash;
+        row.avatar_override = over;
         // 模型 / 职责同样静默降级：读不到只是不显示，不让团队接口失败。
         let slot = row.model_slot.as_deref().unwrap_or("default");
         row.model = crate::provider_config::model_label_in(&doc, slot);

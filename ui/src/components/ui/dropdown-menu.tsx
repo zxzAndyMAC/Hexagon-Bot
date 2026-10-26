@@ -31,6 +31,7 @@ function DropdownMenuContent({ className, sideOffset = 6, ...props }: React.Comp
   )
 }
 
+/** 菜单行（A16 `mi`）；右键菜单 A16b 同用。 */
 const itemBase =
   "hx-press relative flex cursor-pointer items-center gap-[9px] rounded-[7px] px-[9px] text-[13px] outline-none select-none data-highlighted:bg-hover data-disabled:cursor-default data-disabled:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-ink-2"
 
@@ -52,7 +53,7 @@ function DropdownMenuItem({
   return (
     <MenuPrimitive.Item
       data-slot="dropdown-menu-item"
-      className={cn(itemBase, tall ? "items-start py-2" : "h-8", tone === "danger" && "text-red [&_svg]:text-red", className)}
+      className={cn(itemBase, tall ? "items-start py-2" : "h-8", tone === "danger" && "text-red-ink [&_svg]:text-red", className)}
       {...props}
     >
       {icon}
@@ -110,7 +111,7 @@ function DropdownMenuSkeleton({ label }: { label: string }) {
 /** 错误：单行 --red 文案 + 「重试」（A16）。 */
 function DropdownMenuError({ message, retryLabel, onRetry }: { message: string; retryLabel: string; onRetry: () => void }) {
   return (
-    <div data-slot="dropdown-menu-error" role="alert" className="flex h-8 items-center gap-2 px-[9px] text-[13px] text-red">
+    <div data-slot="dropdown-menu-error" role="alert" className="flex h-8 items-center gap-2 px-[9px] text-[13px] text-red-ink">
       <span className="truncate">{message}</span>
       <MenuPrimitive.Item onSelect={(e) => { e.preventDefault(); onRetry() }} className="ml-auto cursor-pointer rounded-[6px] px-1.5 text-[12.5px] text-ink outline-none data-highlighted:bg-hover">
         {retryLabel}
@@ -137,5 +138,6 @@ export {
   DropdownMenuSeparator,
   DropdownMenuSkeleton,
   DropdownMenuTrigger,
+  itemBase as menuItemBase,
   popSurface,
 }

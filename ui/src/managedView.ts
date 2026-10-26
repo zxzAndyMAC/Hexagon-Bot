@@ -8,7 +8,7 @@ export type RowChip = 'executed' | 'effective' | 'refused' | 'out_of_scope' | 'i
 export type ChipTone = 'ok' | 'neutral' | 'warn' | 'err'
 
 const REFUSALS = new Set(['deny', 'reject', 'refuse', 'abandon', 'end'])
-const EXECUTIONS = new Set(['allow', 'install', 'publish', 'run_checks', 'new_attempt', 'retry', 'resume', 'resume_run', 'direct_use', 'continue'])
+const EXECUTIONS = new Set(['allow', 'install', 'push', 'release', 'run_checks', 'new_attempt', 'retry', 'resume', 'resume_run', 'direct_use', 'continue'])
 
 /** gap A5：宿主把「超出托管授权」分类为 out_of_scope（core `report::classify` 封闭表），优先于失败 / 未完成显示。 */
 export function rowChip(record: Pick<ManagedRecord, 'result' | 'action'> & Partial<Pick<ManagedRecord, 'scope'>>): RowChip {

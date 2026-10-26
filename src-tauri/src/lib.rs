@@ -13,6 +13,8 @@ use serde_json::Value;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+mod reveal;
+
 /// IPC 错误信封（ADR 0054，arch-review 票 06）：Tauri 把 `Err` 面序列化成
 /// `{code, message}` 对象，UI 对已知 code 走 `errors.<code>` i18n、未知
 /// code 渲染 message。code 取 `ErrorCode`（变体稳定标识）；壳层自身错误
@@ -682,12 +684,13 @@ fn session_capabilities(
 
 /// Pending dock tier, lower is more severe. Mirrors `ui/src/decisions.ts`
 /// SEVERITY and the CONTEXT「待决坞」ruling (2026-10-12): recovery = stall =
-/// publish = worktree = install = grant, then stage stamp, escalation,
+/// push = release = release_target = worktree = install = grant, then stage stamp, escalation,
 /// permission, proposal stamp. Re-audit 2026-10-13: the earlier ranking
 /// put recovery and stall below permission and mislabelled the summary.
 fn pending_tier(card: &hexagon_core::cards::QueuedCard) -> (u8, &'static str) {
     match card.kind.as_str() {
-        "recovery" | "stall" | "publish" | "worktree" | "install" | "grant" => (0, "critical"),
+        "recovery" | "stall" | "push" | "release" | "release_target" | "worktree" | "install"
+        | "grant" => (0, "critical"),
         "stamp"
             if card
                 .payload
@@ -2065,6 +2068,48 @@ fn create_repo_dir(state: ProjectState<'_>, path: String) -> Result<(), CmdError
     })
 }
 
+/// 在访达 / 资源管理器 / 文件管理器中显示（控制组，owner-followups-1015 #07，A16b）。
+/// 根约束在 core 判（`reveal::reveal_target`：规范化 + 解链接后必须在项目根内，越界记 Warn）；
+/// 壳层只拿判定后的绝对路径调系统，锁在调系统之前释放（不让外部进程握着 conn）。
+/// async（ticket 33 / 2026-10-25 批次审查 S11）：`open -R` 要等子进程退出，同步命令跑在主线程上会卡住界面。
+#[tauri::command(async)]
+fn reveal_repo_path(state: ProjectState<'_>, path: String) -> Result<(), CmdError> {
+    let target = with_project_conn(&state, |_db, root| {
+        hexagon_core::reveal::reveal_target(root, &path)
+    })?;
+    reveal::show_in_file_manager(&target).map_err(cmd_err)
+}
+
+/// 「打开方式」候选（owner-followups-1015 #31，A16b）：白名单 ∩ 系统登记、按目标种类过滤，
+/// 判定全在 core（`open_with::candidates`）。只读项目根，不碰工作台。
+// D01 read: only the current control connection for the project root; no workbench/turn lock.
+#[tauri::command(async)]
+fn open_with_candidates(
+    state: ProjectState<'_>,
+    path: String,
+) -> Result<Vec<hexagon_core::open_with::OpenWithApp>, CmdError> {
+    with_project_conn(&state, |_db, root| {
+        hexagon_core::open_with::candidates(hexagon_core::open_with::system_catalog(), root, &path)
+    })
+}
+
+/// 用指定应用打开项目内路径（控制组，#31）：core 重判根约束 + 白名单 + 当下候选后才启动，
+/// 参数逐个交给系统、不经 shell。async 同 `reveal_repo_path`（ticket 33 S11：`open -a` 等子进程退出，不占主线程）。
+#[tauri::command(async)]
+fn open_with(state: ProjectState<'_>, path: String, app_id: String) -> Result<(), CmdError> {
+    let root = with_project_conn(&state, |_db, root| {
+        Ok::<_, hexagon_core::open_with::OpenWithError>(root.to_path_buf())
+    })?;
+    // 锁在启动外部进程之前释放（同 reveal_repo_path）。
+    hexagon_core::open_with::open_with(
+        hexagon_core::open_with::system_catalog(),
+        &root,
+        &path,
+        &app_id,
+    )
+    .map_err(cmd_err)
+}
+
 /// 小改写回（控制组，落盘）。不写穿符号链接。
 #[tauri::command]
 fn write_repo_file(
@@ -2773,26 +2818,178 @@ fn rollback_proposal(state: ProjectState<'_>, proposal_id: String) -> Result<(),
 }
 
 #[tauri::command]
-fn request_publish(state: ProjectState<'_>, remote: String) -> Result<String, CmdError> {
-    // 发布请求只是入队待决卡（控制组）；push 在 confirm_publish（wb 组，要 creds）
-    with_project_conn(&state, |db, _| {
-        hexagon_core::publish::request(db, PROJECT_ID, &remote).map_err(cmd_err)
-    })
+fn request_push(
+    state: ProjectState<'_>,
+    remote: String,
+) -> Result<hexagon_core::push::PushRequest, CmdError> {
+    // owner-followups-1015 #13：入队推送卡；本项目已允许同一（远程, 分支）时当场推送，
+    // 要 creds——所以从控制组移到 wb 组（原先只入队，走 with_project_conn）。
+    with_wb(&state, |wb| wb.request_push(&remote))
 }
 
 #[tauri::command]
-fn confirm_publish(
+fn confirm_push(
     state: ProjectState<'_>,
     qid: String,
-) -> Result<hexagon_core::publish::PublishOutcome, CmdError> {
-    with_wb(&state, |wb| wb.confirm_publish(&qid))
+    remember: Option<bool>,
+) -> Result<hexagon_core::push::PushOutcome, CmdError> {
+    with_wb(&state, |wb| {
+        wb.confirm_push(&qid, remember.unwrap_or(false))
+    })
+}
+
+/// ⌘K「推送」目标候选（#13）：只读 git 远程配置，不碰 wb。
+#[tauri::command]
+fn push_targets(state: ProjectState<'_>) -> Result<hexagon_core::push::PushTargets, CmdError> {
+    with_project_conn(&state, |db, _| {
+        hexagon_core::push::targets(db, PROJECT_ID).map_err(cmd_err)
+    })
 }
 
 #[tauri::command]
-fn reject_publish(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+fn reject_push(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
     with_project_conn(&state, |db, _| {
-        hexagon_core::publish::reject(db, PROJECT_ID, &qid).map_err(cmd_err)
+        hexagon_core::push::reject(db, PROJECT_ID, &qid).map_err(cmd_err)
     })
+}
+
+// ---- 发布目标（owner-followups-1015 #14，control 组，不碰工作台锁）----
+// 钥匙串读写可能等系统（QA readiness 2026-10-06：凭据查询会卡在 OS 上）：锁内只取 root，
+// 锁外自开账本连接（同 stage_evidence / artist_regenerate），暂停电脑操作要用的控制连接
+// 在此期间一直可用；async 免得冻住窗口。只有负责人从设置·发布页调用，Agent 没有入口。
+fn release_db(state: &ProjectState<'_>) -> Result<hexagon_core::db::Db, CmdError> {
+    let root = with_project_conn(state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn release_targets(
+    state: ProjectState<'_>,
+) -> Result<Vec<hexagon_core::release_targets::ReleaseTarget>, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::list(&db, PROJECT_ID, &*hexagon_core::credentials::active())
+        .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn save_release_target(
+    state: ProjectState<'_>,
+    draft: hexagon_core::release_targets::ReleaseTargetDraft,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::save(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &draft,
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn remove_release_target(state: ProjectState<'_>, id: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::remove(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+    )
+    .map_err(cmd_err)
+}
+
+/// 凭据明文只经这一条入参进钥匙串：不记日志、不回传（返回值只有「已存入」）。
+#[tauri::command(async)]
+fn set_release_credential(
+    state: ProjectState<'_>,
+    id: String,
+    credential: String,
+    secret: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::set_credential(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+        &credential,
+        &secret,
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn remove_release_credential(
+    state: ProjectState<'_>,
+    id: String,
+    credential: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::remove_credential(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+        &credential,
+    )
+    .map_err(cmd_err)
+}
+
+// ---- 发布执行（owner-followups-1015 #15，control 组，不碰工作台锁）----
+// 发布命令可能跑几分钟（包发布 / 部署）：确认走自开账本连接 + async，不占工作台锁、不冻窗口；
+// 认领卡用 cards::claim 原子迁移，与托管处理器同时裁决也只会跑一次。只有负责人从发布确认卡 /
+// ⌘K 调用；托管经工作台门面走同一个 core 函数。
+#[tauri::command(async)]
+fn request_release(state: ProjectState<'_>, target_id: String) -> Result<String, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::request(&db, PROJECT_ID, &target_id, "owner").map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn confirm_release(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::release::ReleaseOutcome, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::confirm(&db, PROJECT_ID, &qid, &*hexagon_core::credentials::active())
+        .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn reject_release(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::reject(&db, PROJECT_ID, &qid).map_err(cmd_err)
+}
+
+// ---- 登记发布目标卡（owner-followups-1015 #16，control 组）----
+// Agent 在聊天里拟的发布目标：负责人在卡上批准才写入登记表；裁决人钉死 "owner"——
+// 这两个命令只从负责人的卡按钮调用，托管不接管本卡种（core managed decision_key）。
+#[tauri::command(async)]
+fn approve_release_target_card(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_chat::approve(
+        &db,
+        PROJECT_ID,
+        &qid,
+        &*hexagon_core::credentials::active(),
+        &hexagon_core::release::Decider::Owner,
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn reject_release_target_card(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_chat::reject(
+        &db,
+        PROJECT_ID,
+        &qid,
+        &hexagon_core::release::Decider::Owner,
+    )
+    .map_err(cmd_err)
 }
 
 #[tauri::command]
@@ -2801,19 +2998,110 @@ fn set_agent_avatar(
     agent_id: String,
     data_url: String,
 ) -> Result<(), CmdError> {
-    // 纯文件写（avatars/ 目录）——控制通道取 root 即可
+    // 纯文件写（avatars/ 目录）——控制通道取 root 即可。票 17：这是实例覆盖层。
     with_project_conn(&state, |_, root| {
-        hexagon_core::roles::set_agent_avatar(root, &agent_id, &data_url).map_err(cmd_err)
+        hexagon_core::avatars::set_agent_avatar(root, &agent_id, &data_url)
     })
 }
 
+/// 票 17：实例层「恢复默认」——删覆盖，露出角色头像。
+#[tauri::command]
+fn clear_agent_avatar(state: ProjectState<'_>, agent_id: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::clear_agent_avatar(root, &agent_id)
+    })
+}
+
+/// 生效头像（实例覆盖 > 角色头像）；角色从控制连接的 agents 表取。
 #[tauri::command]
 fn agent_avatar(
     state: tauri::State<AppState>,
     agent_id: String,
 ) -> Result<Option<String>, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::avatars::agent_avatar(db, root, &agent_id)
+    })
+}
+
+#[tauri::command]
+fn role_avatar(state: tauri::State<AppState>, role: String) -> Result<Option<String>, CmdError> {
     with_conn(&state, |_, root| {
-        hexagon_core::roles::agent_avatar(root, &agent_id).map_err(cmd_err)
+        hexagon_core::avatars::role_avatar(root, &role)
+    })
+}
+
+#[tauri::command]
+fn set_role_avatar(
+    state: ProjectState<'_>,
+    role: String,
+    data_url: String,
+) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::set_role_avatar(root, &role, &data_url)
+    })
+}
+
+#[tauri::command]
+fn clear_role_avatar(state: ProjectState<'_>, role: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::clear_role_avatar(root, &role)
+    })
+}
+
+/// 票 20：头像提案读面（纯文件，读组，不碰工作台）。
+#[tauri::command]
+fn artist_proposal(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_conn(&state, |_, root| {
+        hexagon_core::artist_proposal::load(root, &id)
+    })
+}
+
+/// 票 20：提案卡「换一张」。出图是秒级到分钟级的网络 IO：锁内只取 root，锁外自开账本
+/// 连接（同 stage_evidence），控制连接与工作台在此期间都可用；async 免得冻住窗口。
+#[tauri::command(async)]
+fn artist_regenerate(
+    state: ProjectState<'_>,
+    id: String,
+    role: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    let db = hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)?;
+    let access = hexagon_core::image_gen::ImageAccess::new(hexagon_core::credentials::active());
+    let cx = hexagon_core::artist_proposal::DrawCtx {
+        db: &db,
+        root: &root,
+        project_id: PROJECT_ID,
+        agent_id: None,
+        stage_run_id: None,
+    };
+    hexagon_core::artist_proposal::regenerate(&cx, &access, &id, &role).map_err(cmd_err)
+}
+
+/// 票 20：「全部应用」——负责人勾下的格按角色写头像（票 17 写入路径）。纯文件 + 一条轨迹。
+#[tauri::command]
+fn artist_apply(
+    state: ProjectState<'_>,
+    id: String,
+    roles: Vec<String>,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::artist_proposal::apply(db, root, PROJECT_ID, &id, &roles)
+    })
+}
+
+/// ticket 33 P3：提案卡「跳过 / 取消跳过」落盘（纯文件，控制组）。
+#[tauri::command]
+fn artist_skip(
+    state: ProjectState<'_>,
+    id: String,
+    role: String,
+    skipped: bool,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::artist_proposal::set_skipped(root, &id, &role, skipped)
     })
 }
 
@@ -2965,6 +3253,44 @@ fn remove_recent(app: tauri::AppHandle, dir: String) {
     if let Some(p) = recents_path(&app) {
         let _ = std::fs::write(&p, serde_json::to_string(&rs).unwrap_or_default());
     }
+}
+
+/// 启动页最近项目的「打开方式」候选（owner-followups-1015 #32，A16b）：项目级、目录口径。
+/// 根只取 app 自己的 recents 记录（`read_recents`），界面传来的 `dir` 必须逐字等于其中一条——判定在 core
+/// （`open_with::recent_candidates`），不碰工作台、不开项目库。
+// D01 read: app-level recents JSON only; no project state, no workbench/turn lock.
+#[tauri::command(async)]
+fn recent_open_with_candidates(
+    app: tauri::AppHandle,
+    dir: String,
+) -> Result<Vec<hexagon_core::open_with::OpenWithApp>, CmdError> {
+    let known: Vec<std::path::PathBuf> = read_recents(&app)
+        .into_iter()
+        .map(|r| r.dir.into())
+        .collect();
+    hexagon_core::open_with::recent_candidates(
+        hexagon_core::open_with::system_catalog(),
+        &known,
+        &dir,
+    )
+    .map_err(cmd_err)
+}
+
+/// 用指定应用打开最近项目（控制组，#32）：core 先认 recents 记录，再按项目内同一规则重算候选才启动。
+/// async 同 `open_with`（ticket 33 S11）。
+#[tauri::command(async)]
+fn recent_open_with(app: tauri::AppHandle, dir: String, app_id: String) -> Result<(), CmdError> {
+    let known: Vec<std::path::PathBuf> = read_recents(&app)
+        .into_iter()
+        .map(|r| r.dir.into())
+        .collect();
+    hexagon_core::open_with::recent_open_with(
+        hexagon_core::open_with::system_catalog(),
+        &known,
+        &dir,
+        &app_id,
+    )
+    .map_err(cmd_err)
 }
 
 /// 重新打开已有项目：钉住的包副本恢复 pack，fastpath 项目无副本即 None。
@@ -3176,8 +3502,9 @@ fn remove_search_backend(state: tauri::State<AppState>) -> Result<(), CmdError> 
     Ok(())
 }
 
-/// 拉取/检测供应商模型目录：GET /models；key 从 keychain 现取，缺 key 直报。
-/// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
+/// 拉取供应商模型目录：GET /models；key 从 keychain 现取。
+/// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置；失败码与
+/// `probe_provider_key` 的原因词相同（含 `missing_credential`，owner-followups-1015 #03）。
 #[tauri::command]
 fn fetch_provider_models(
     id: String,
@@ -3207,6 +3534,16 @@ fn probe_provider_key(
 #[tauri::command]
 fn provider_presets() -> Vec<hexagon_core::provider_admin::ProviderPreset> {
     hexagon_core::provider_admin::presets()
+}
+
+/// 票 21：服务商表单「实际请求地址」预览（纯计算，读组，不碰工作台）。
+/// 遮蔽形（已存地址未改）与空串回 None，界面不显示预览行。
+#[tauri::command]
+fn provider_request_url(
+    kind: hexagon_core::provider::ProviderKind,
+    base_url: String,
+) -> Option<String> {
+    hexagon_core::provider_admin::request_url_preview(&kind, &base_url)
 }
 
 #[tauri::command]
@@ -3325,6 +3662,11 @@ fn create_project(
             })
             .transpose()?
     };
+    // 票 17：向导里换的角色头像先整单规整（2MB / 可解码 / 中心裁方），不合格在建目录前拒。
+    // 被否决：建好项目后逐张写、坏图跳过——负责人看不到为什么那个角色没换成。
+    let role_avatars =
+        hexagon_core::avatars::prepare_role_avatars(opts.role_avatars.as_deref().unwrap_or(&[]))
+            .map_err(cmd_err)?;
     // 壳层唯一保留的 provider_config:: 直调：create_project 建档校验要文档现状
     let pdoc = hexagon_core::provider_config::load().unwrap_or_default();
     let mut wb = setup::create_project_reporting(
@@ -3344,6 +3686,9 @@ fn create_project(
         },
     )
     .map_err(cmd_err)?;
+    for (role, img) in &role_avatars {
+        hexagon_core::avatars::write_role(&wb.repo_root, role, img).map_err(cmd_err)?;
+    }
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
     wb.attach_providers(hexagon_core::credentials::active());
     let control = open_control(&opts.dir, &wb)?;
@@ -3872,6 +4217,11 @@ pub fn run() {
             create_repo_file,
             create_repo_dir,
             write_repo_file,
+            reveal_repo_path,
+            open_with_candidates,
+            open_with,
+            recent_open_with_candidates,
+            recent_open_with,
             usage,
             usage_context_pressure,
             open_stage,
@@ -3938,11 +4288,31 @@ pub fn run() {
             invariant_check,
             policydev_propose,
             rollback_proposal,
-            request_publish,
-            confirm_publish,
-            reject_publish,
+            request_push,
+            confirm_push,
+            reject_push,
+            push_targets,
+            // 发布目标（owner-followups-1015 #14）：control 组，锁外自开账本连接。
+            release_targets,
+            save_release_target,
+            remove_release_target,
+            set_release_credential,
+            remove_release_credential,
+            request_release,
+            confirm_release,
+            reject_release,
+            approve_release_target_card,
+            reject_release_target_card,
             set_agent_avatar,
+            clear_agent_avatar,
             agent_avatar,
+            role_avatar,
+            set_role_avatar,
+            clear_role_avatar,
+            artist_proposal,
+            artist_regenerate,
+            artist_apply,
+            artist_skip,
             artifact_content_at,
             set_agent_sleeping,
             remove_agent,
@@ -3968,6 +4338,7 @@ pub fn run() {
             fetch_provider_models,
             probe_provider_key,
             provider_presets,
+            provider_request_url,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,
@@ -4302,7 +4673,14 @@ mod session_host_command_tests {
             state: "queued".into(),
         };
         for kind in [
-            "recovery", "stall", "publish", "worktree", "install", "grant",
+            "recovery",
+            "stall",
+            "push",
+            "release",
+            "release_target",
+            "worktree",
+            "install",
+            "grant",
         ] {
             assert_eq!(
                 pending_tier(&card(kind, serde_json::json!({}))),
@@ -4726,6 +5104,27 @@ mod project_identity_tests {
             );
             replace_project(&state, None, None, &Some(identity(current_root, 22))).unwrap();
             assert!(state.conn.lock().unwrap().is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod launch_commands_off_main_thread_tests {
+    /// ticket 33（2026-10-25 批次审查 S11）：起外部进程并等它退出的命令（`open -R` / `open -a`）
+    /// 不得是同步命令——同步 tauri 命令跑在主线程，等子进程期间整个界面冻住。钉源码属性，
+    /// 因为 tauri 宏展开后在运行期看不出同步 / 异步。
+    #[test]
+    fn launching_commands_are_async() {
+        let src = include_str!("lib.rs");
+        for name in ["reveal_repo_path", "open_with", "recent_open_with"] {
+            let sig = format!("\nfn {name}(");
+            let at = src.find(&sig).unwrap_or_else(|| panic!("{name} not found"));
+            let head = &src[..at];
+            let attr = head.rfind("#[tauri::command").expect("attribute");
+            assert!(
+                head[attr..].starts_with("#[tauri::command(async)]"),
+                "{name} must be #[tauri::command(async)]"
+            );
         }
     }
 }

@@ -98,6 +98,46 @@ describe('阶段进度（ADR 0069 只读；ADR 0088：右栏「阶段」页签 �
     expect(list.querySelector('[data-stage-state="active"]')).toBeTruthy()
     expect(list.querySelector('[data-stage-state="waiting_stamp"]')).toBeTruthy()
   })
+
+  // owner-followups-1015 #02 回归（2026-10-15 负责人：深浅两套下阶段圆圈粗细不匀）：
+  // 曾是 15px 圆点 + 1.5px 内环（+ 1.5px 连线在左 6.5）。实测（Playwright，沿圆周每 3° 径向积分）
+  // 描边视觉粗细的相对极差 DPR1 ≈ 25%、DPR2 ≈ 15%；16px + 2px 降到 ≈ 17% / 8%，贴近 SVG 抗锯齿底噪（13% / 9%）。
+  // 守住：圆点、环、连线都是整数像素，偶数圆点让行内居中（28 高）落整数，连线中心对准圆心。
+  it('阶段圆点 / 环 / 连线都是整数像素，连线居中对准圆心（#02）', async () => {
+    const all: StageRow['state'][] = ['done', 'active', 'waiting_stamp', 'interrupted', 'rejected', 'skipped', 'pending']
+    useUiStore.setState({ stages: all.map((state, i) => ({ run_id: `r${i}`, stage: state, seq: i, state })) })
+    const host = await render(sidebar)
+    const px = (cls: string, re: RegExp) => { const m = cls.match(re); expect(m, `${re} in ${cls}`).toBeTruthy(); return Number(m![1]) }
+    const int = (n: number) => expect(Number.isInteger(n), `${n}px 不是整数像素`).toBe(true)
+    for (const li of host.querySelectorAll<HTMLElement>('[data-stage-list] li')) {
+      const dot = li.querySelector<HTMLElement>('span.rounded-full')!
+      const size = px(dot.className, /size-\[([\d.]+)px\]/)
+      int(size)
+      expect(size % 2, '偶数圆点：28 高行内居中落整数').toBe(0)
+      if (li.dataset.stageState !== 'done') int(px(dot.className, /inset_0_0_0_([\d.]+)px/))
+      const link = li.querySelector<HTMLElement>('span[aria-hidden]')
+      if (link) {
+        const w = px(link.className, /w-\[([\d.]+)px\]/), left = px(link.className, /left-\[([\d.]+)px\]/)
+        int(w); int(left)
+        expect(left + w / 2).toBe(size / 2)
+      }
+    }
+  })
+
+  // owner-followups-1015 #30 第 2 项（2026-10-20 负责人裁决）：#02 之后圆点内图标仍 9px，(16 − 9) / 2 = 3.5，
+  // 落在半像素上，DPR1 下勾 / 戳 / 叉被抗锯齿成一团且偏半格。守住：圆点内图标与圆点同奇偶（16 内放 10），居中落整数。
+  it('阶段圆点内的图标与圆点同奇偶，居中落整像素（#30）', async () => {
+    const all: StageRow['state'][] = ['done', 'waiting_stamp', 'interrupted', 'rejected']
+    useUiStore.setState({ stages: all.map((state, i) => ({ run_id: `r${i}`, stage: state, seq: i, state })) })
+    const host = await render(sidebar)
+    for (const li of host.querySelectorAll<HTMLElement>('[data-stage-list] li')) {
+      const dot = li.querySelector<HTMLElement>('span.rounded-full')!
+      const size = Number(dot.className.match(/size-\[(\d+)px\]/)![1])
+      const icon = dot.querySelector('svg')!
+      const w = Number(icon.getAttribute('width'))
+      expect((size - w) / 2, `${li.dataset.stageState}: ${w}px 图标在 ${size}px 圆点内`).toSatisfy(Number.isInteger)
+    }
+  })
 })
 
 const card = (id: string): PendingQuestion => ({ id, kind: 'permission', agent_id: 'a1', payload: {}, state: 'queued' } as PendingQuestion)
@@ -121,12 +161,14 @@ describe('侧栏待决与团队（B1、B3）', () => {
     expect(useUiStore.getState().pendingDialogOpen).toBe(true)
   })
 
-  it('工作中显示像素格，休眠半透明并写「休眠」；点成员打开该 Agent', async () => {
+  // 行为变更（owner-followups-1015 票 09，foundations「对比度」）：休眠行原先整行 opacity .5，名字与「休眠」
+  // 跟着掉到 AA 以下；改为只有头像半透明去饱和，名字照常 --ink。
+  it('工作中显示像素格，休眠只淡化头像并写「休眠」；点成员打开该 Agent', async () => {
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
-        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, model: null, duty: null, superior: null },
-        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
+        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
+        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
       ],
       streams: { a1: { 0: '正在写' } },
     })
@@ -136,7 +178,13 @@ describe('侧栏待决与团队（B1、B3）', () => {
     expect(fe.querySelector('[data-slot="pixel-grid"]')).toBeTruthy()
     const qa = host.querySelector('[data-member="a2"]') as HTMLButtonElement
     expect(qa.getAttribute('data-member-state')).toBe('sleeping')
-    expect(qa.className).toContain('opacity-50')
+    expect(qa.className).not.toContain('opacity-50')
+    expect(qa.textContent).toContain(i18n.t('sidebar.sleeping'))
+    const face = qa.querySelector('[data-slot="avatar"]') as HTMLElement
+    expect(face.getAttribute('data-dimmed')).toBe('true')
+    expect(face.className).toContain('opacity-50')
+    expect(face.className).toContain('grayscale')
+    expect(fe.querySelector('[data-slot="avatar"]')!.hasAttribute('data-dimmed')).toBe(false)
     expect(host.querySelector('[data-member="a3"]')!.getAttribute('data-member-state')).toBe('online')
     await act(async () => { fe.click() })
     expect(useUiStore.getState().activeTab).toBe('agent:a1')
@@ -150,8 +198,8 @@ describe('成员悬停名片（B3 HoverCard）', () => {
     await i18n.changeLanguage('zh-CN')
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: 'code', status: 'active', avatar_hash: null, model: 'Claude Sonnet 5.5', duty: '实现界面与前端逻辑', superior: '架构师' },
-        { id: 'a2', role: '项目经理', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a1', role: '前端', model_slot: 'code', status: 'active', avatar_hash: null, avatar_override: false, model: 'Claude Sonnet 5.5', duty: '实现界面与前端逻辑', superior: '架构师' },
+        { id: 'a2', role: '项目经理', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
       ],
       streams: {},
     })

@@ -133,19 +133,41 @@ impl Workbench {
                 self.end_card_incomplete(&card)?;
                 "incomplete"
             }
-            ("publish", _, "publish") => {
-                crate::publish::confirm_by(
+            ("push", _, "push") => {
+                crate::push::confirm_by(
                     &self.db,
                     &self.project_id,
                     &card.id,
                     self.creds.as_ref(),
                     &self.decider(),
                 )?;
-                "published"
+                "pushed"
             }
-            ("publish", _, _) => {
-                crate::publish::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
-                "not_published"
+            ("push", _, _) => {
+                crate::push::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
+                "not_pushed"
+            }
+            // owner-followups-1015 #15: the confirm gate re-checks the same facts
+            // (target unchanged, credentials present) before it claims the card.
+            ("release", _, "release") => {
+                crate::release::confirm_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    self.creds.as_ref(),
+                    &self.release_decider(),
+                    crate::release::RELEASE_TIMEOUT,
+                )?;
+                "released"
+            }
+            ("release", _, _) => {
+                crate::release::reject_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    &self.release_decider(),
+                )?;
+                "not_released"
             }
             // The confirmation rechecks its own facts again at execution.
             ("worktree", _, "confirm") => {

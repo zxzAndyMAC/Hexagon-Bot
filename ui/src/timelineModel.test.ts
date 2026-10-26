@@ -76,6 +76,22 @@ describe('buildRows', () => {
     expect(dec).toHaveLength(1)
   })
 
+  it('artist speech stays visible under every filter (ticket 33 P2)', () => {
+    // 票 19 / 28 / 20 的画师发言是 system 事件、不带 message；原来「消息」「决策」档把它们连按钮一起筛掉。
+    const artist = [
+      ev(1, 'system', { kind: 'artist_image_model_missing' }),
+      ev(2, 'system', { kind: 'artist_prompt_failed' }),
+      ev(3, 'system', { kind: 'artist_avatar_proposal', proposal_id: 'p1' }),
+      ev(4, 'system', { kind: 'tool_execution_started' }),
+    ]
+    for (const filter of ['all', 'messages', 'decisions', 'story'] as const) {
+      const ids = buildRows(artist, filter)
+        .filter((r) => r.type === 'item')
+        .map((r) => (r as { item: TimelineItem }).item.event.id)
+      expect(ids.slice(0, 3), filter).toEqual([1, 2, 3])
+    }
+  })
+
   it('filters messages and decisions', () => {
     const msgs = buildRows(tl, 'messages')
     expect(msgs).toHaveLength(1)
@@ -255,9 +271,9 @@ describe('markHighlights', () => {
 })
 
 describe('severityOf', () => {
-  it('orders publish > stage stamp > escalation > permission > proposal stamp', () => {
+  it('orders push > stage stamp > escalation > permission > proposal stamp', () => {
     const order = [
-      q('p', 'publish'),
+      q('p', 'push'),
       q('s', 'stamp', { run_id: 'r1' }),
       q('e', 'escalation'),
       q('a', 'permission'),

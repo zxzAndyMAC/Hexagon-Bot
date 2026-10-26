@@ -3,6 +3,13 @@ import i18n from './i18n'
 
 /** 账本单位：成本以 millicents 计，上限以 cents 计。1 ¥ = 100 cents = 100_000 mc。 */
 export const MC_PER_YUAN = 100000
+
+/** 票 20：画师出图的账在 core 汇总读面上归 `artist`（usage::ARTIST_ACTOR）——画师不是团队成员，
+ *  不在 team 里，名字取隐藏预置角色名（同其他角色名，是项目内容不翻译）。 */
+export const USAGE_ARTIST_ACTOR = 'artist'
+export const ARTIST_NAME = '画师'
+export const usageActorName = (team: { id: string; role: string }[], id: string) =>
+  team.find((m) => m.id === id)?.role ?? (id === USAGE_ARTIST_ACTOR ? ARTIST_NAME : id)
 export const MC_PER_CENT = 1000
 export const CENTS_PER_YUAN = 100
 

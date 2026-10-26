@@ -5,8 +5,9 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022）：
-//! kind ∈ {permission, stamp, escalation, publish, recovery, install, grant, stall}
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064/0066/0067）：
+//! kind ∈ {permission, stamp, escalation, push, release, release_target, recovery, install, grant, stall, worktree}
+//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行；release 是发布确认卡，迁移 0066；release_target 是登记发布目标卡，迁移 0067）
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -41,7 +42,15 @@ pub enum CardKind {
     Escalation,
     Recovery,
     Install,
-    Publish,
+    /// 推送确认卡（原 publish，ADR 0093 / 迁移 0064 改名）。
+    Push,
+    /// 发布确认卡（owner-followups-1015 #15，迁移 0066）：执行已登记的发布目标。必问、永不记忆——
+    /// 没有任何记住入口（不写 permission_rules、不读记忆层），每次发布都是一张新卡。
+    Release,
+    /// 「登记发布目标」卡（owner-followups-1015 #16，迁移 0067）：Agent 在聊天里拟的发布目标，负责人批准才
+    /// 写入登记表。托管不代批（managed `decision_key` 不接管）。被否决：搭 release 卡种加 sub——托管可确认
+    /// release 卡，同卡种让托管路由按 sub 分叉，漏判一处就是托管替负责人登记了一条命令。
+    ReleaseTarget,
     /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
     Grant,
     /// 失速卡（stall-watch 票 02 / ADR 0074）：只有「再试一次」「知道了」，
@@ -62,7 +71,9 @@ impl CardKind {
             Self::Escalation => "escalation",
             Self::Recovery => "recovery",
             Self::Install => "install",
-            Self::Publish => "publish",
+            Self::Push => "push",
+            Self::Release => "release",
+            Self::ReleaseTarget => "release_target",
             Self::Grant => "grant",
             Self::Stall => "stall",
             Self::Worktree => "worktree",
@@ -77,7 +88,9 @@ impl CardKind {
             "escalation" => Ok(Self::Escalation),
             "recovery" => Ok(Self::Recovery),
             "install" => Ok(Self::Install),
-            "publish" => Ok(Self::Publish),
+            "push" => Ok(Self::Push),
+            "release" => Ok(Self::Release),
+            "release_target" => Ok(Self::ReleaseTarget),
             "grant" => Ok(Self::Grant),
             "stall" => Ok(Self::Stall),
             "worktree" => Ok(Self::Worktree),
@@ -167,6 +180,27 @@ pub fn answer(db: &Db, qid: &str, by: &str) -> Result<(), CardsError> {
     Ok(())
 }
 
+/// 认领一张卡：queued→answered 的原子条件迁移（同一条 UPDATE 里判 state + kind + project）。
+/// 返回 false = 卡已不在 queued（被别人答过 / 过期 / 不是这个卡种）。
+///
+/// 发布确认卡（owner-followups-1015 #15）用它代替 `get_queued` + `answer` 两步：两步之间负责人连点、
+/// 或负责人与托管同时裁决，会让同一条不可逆发布命令跑两次。代价模型：认领失败只让这次点击报错，
+/// 漏挡一次是一次重复发布——所以只认这条 UPDATE 的受影响行数。
+pub fn claim(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    kind: CardKind,
+    by: &str,
+) -> Result<bool, CardsError> {
+    let n = db.conn().execute(
+        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by=?4
+         WHERE id=?1 AND project_id=?2 AND kind=?3 AND state='queued'",
+        rusqlite::params![qid, project_id, kind.as_str(), by],
+    )?;
+    Ok(n == 1)
+}
+
 /// 载荷补丁：把 fields 的键值合进卡 payload（读-改-写，等价于
 /// 历史上 reviewer 的整列覆写与 judge 的 json_set 原地位补丁）。
 pub fn annotate(db: &Db, qid: &str, fields: &[(&str, Value)]) -> Result<(), CardsError> {
@@ -222,7 +256,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant' | 'stall' | 'worktree'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'release' | 'release_target' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,
@@ -306,6 +340,58 @@ pub fn get(db: &Db, qid: &str) -> Result<Card, CardsError> {
                 answered_by,
             },
         )
+}
+
+/// 按 id 取某一卡种、属于 `project_id` 的卡（任意状态）：没有这张卡、卡种或项目不符 → `Ok(None)`；
+/// 数据库读失败如实上抛。ticket 33（2026-10-25 批次审查 S2，原票 #15 / #16）：发布与登记拟稿的裁决入口
+/// 曾写 `get(..).ok()`，把锁表 / I/O 这类读失败当成「未知卡」报给负责人（`release_question_unknown`），
+/// 掩盖了真正的故障；[`get`] 自身也把所有读错映成 `NotFound`，所以另起这个助手而不是在调用方 `.ok()`。
+pub fn get_kind(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    kind: CardKind,
+) -> Result<Option<Card>, CardsError> {
+    use rusqlite::OptionalExtension;
+    let row = db
+        .conn()
+        .query_row(
+            "SELECT id, agent_id, payload, state, idem_key, answered_by
+             FROM pending_questions WHERE id=?1 AND project_id=?2 AND kind=?3",
+            rusqlite::params![qid, project_id, kind.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.map(
+        |(id, agent_id, payload, state, idem_key, answered_by)| Card {
+            id,
+            project_id: project_id.to_string(),
+            kind: kind.as_str().to_string(),
+            agent_id,
+            payload: serde_json::from_str(&payload).unwrap_or_default(),
+            state: CardState::from_str(&state),
+            idem_key,
+            answered_by,
+        },
+    ))
+}
+
+/// 测试接缝：让之后的卡读取全部失败（表改名），用来钉「读失败如实上抛」（ticket 33 S2）。
+/// 放在属主模块里，测试不在别处直接写 pending_questions（D04）。
+#[cfg(test)]
+pub(crate) fn break_reads_for_test(db: &Db) {
+    db.conn()
+        .execute_batch("ALTER TABLE pending_questions RENAME TO pending_questions_gone")
+        .unwrap();
 }
 
 /// The queued card holding one idempotency key, if any (managed-followups
@@ -570,6 +656,38 @@ mod tests {
             )
             .unwrap();
         db
+    }
+
+    #[test]
+    fn get_kind_separates_absent_from_read_failure() {
+        // ticket 33（2026-10-25 批次审查 S2）：不存在 / 卡种不符 / 项目不符 = Ok(None)；读库失败 = Err。
+        let db = db();
+        let qid = enqueue(
+            &db,
+            "p1",
+            Some("a1"),
+            CardKind::Release,
+            serde_json::json!({"target_id":"t1"}),
+            None,
+        )
+        .unwrap();
+        let card = get_kind(&db, "p1", &qid, CardKind::Release)
+            .unwrap()
+            .unwrap();
+        assert_eq!(card.kind, "release");
+        assert_eq!(card.state, CardState::Queued);
+        assert_eq!(card.payload["target_id"], "t1");
+        assert!(get_kind(&db, "p1", &qid, CardKind::ReleaseTarget)
+            .unwrap()
+            .is_none());
+        assert!(get_kind(&db, "p2", &qid, CardKind::Release)
+            .unwrap()
+            .is_none());
+        assert!(get_kind(&db, "p1", "q-nope", CardKind::Release)
+            .unwrap()
+            .is_none());
+        break_reads_for_test(&db);
+        assert!(get_kind(&db, "p1", &qid, CardKind::Release).is_err());
     }
 
     #[test]

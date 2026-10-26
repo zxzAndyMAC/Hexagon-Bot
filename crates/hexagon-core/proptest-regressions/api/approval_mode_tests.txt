@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d54f251468628c9f9a6c8d16803c271736581a59880c8cac9367cf7d9f6e1aaf # shrinks to mode = Broad, cmd = "npm test", child = false
+cc c056ab88ec2c6859c4815b83a813e7039cf6adbbc87f857c64f94cacdeaeeaaa # shrinks to mode = Restricted, cmd = "git push origin main", remembered = false

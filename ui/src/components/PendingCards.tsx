@@ -7,6 +7,7 @@ import { Trans, useTranslation } from 'react-i18next'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import { isActivationResumeCard, policyNeedsQuality, rejectReasonWithJudge } from '../decisions'
+import { openReleaseSettings } from '../releaseFocus'
 import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { JudgeModelFailure, RejudgeButton, judgeFailureTitle } from './JudgeModelFailure'
 import { PermissionActions } from './PermissionActions'
@@ -15,6 +16,7 @@ import { DesignChoices } from './DesignChoices'
 import { ExperienceProposal } from './ExperienceProposal'
 import { StageEvidence } from './StageEvidence'
 import { Icon } from './Icon'
+import { Checkbox } from './ui/checkbox'
 import { DecisionButton, DecisionShell, KeyValues, SettleButton } from './DecisionShell'
 import { AcceptanceException, ActionRecovery, InlineDiff, PolicyReport, QualityRevalidation, StageArtifacts } from './PendingCardParts'
 
@@ -77,6 +79,9 @@ function PermissionCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const cmd = commandText(p)
   // 票 16B（control#action）：电脑动作走 D8 专用卡；判定失败卡仍用通用形（标题、重新判定按钮在那里）
   if (tool === 'computer_action' && !judgeTitle) return <ComputerActionCard q={q} top={top} who={who} />
+  // owner-followups-1015 #13：Agent 终端 `git push` 画推送卡形（与 ⌘K 推送同一张卡的样子）；判定失败卡仍用通用形。
+  const push = p.push as AgentPushFacts | null | undefined
+  if (push && !judgeTitle) return <AgentPushCard q={q} top={top} who={who} push={push} />
   return (
     <DecisionShell qid={q.id} cat={judgeTitle ? 'mute' : 'warn'} icon={judgeTitle ? 'warn' : 'shield'}
       title={judgeTitle ?? (who ? t('dock.askTitle', { who, tool }) : t('cards.ask'))}
@@ -94,6 +99,36 @@ function PermissionCard({ q, top }: { q: PendingQuestion; top: boolean }) {
         {t('cards.writeTargets')} <span className="mono">{p.write_targets.filter((v): v is string => typeof v === 'string').join(' · ')}</span>
       </p>}
       <ProvenanceLines payload={p} />
+      <JudgeModelFailure q={q} top={top} />
+    </DecisionShell>
+  )
+}
+
+/** 宿主载荷 `push`（`push_class::card_facts`）：普通推送带远程 + 分支，强推带原因码。只用于展示。 */
+type AgentPushFacts = { force?: boolean; remote?: string; branch?: string; code?: string }
+
+/** #13：Agent 终端推送。普通推送 = 推送卡形 + 权限底栏（「允许本项目」记 远程 + 分支，宿主给范围时才有 ▾）；
+ *  强推 = 安全网：必问、无范围菜单、托管不代批，卡上写明会改写远端历史。 */
+function AgentPushCard({ q, top, who, push }: { q: PendingQuestion; top: boolean; who: string; push: AgentPushFacts }) {
+  const { t } = useTranslation()
+  const force = push.force === true
+  const cmd = commandText(q.payload)
+  return (
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger
+      title={who ? t('cards.agentPush', { who }) : t('cards.push')}
+      sub={[t('dock.pushSub'), t('cards.pushFromTerminal'), force ? t('cards.askSafetyNet') : ''].filter(Boolean).join(' · ')}
+      lead={<RejudgeButton q={q} top={top} />}
+      note={null}
+      actions={<PermissionActions key={q.id} q={q} top={top} />}>
+      {cmd && <code className="dock-cmd">{cmd}</code>}
+      {force ? <>
+        <div className="dock-row"><span className="chip err">{t('cards.pushForce')}</span></div>
+        <div className="dock-warn"><Icon name="warn" size={14} />{t('cards.pushForceWarn')}</div>
+      </> : <KeyValues rows={[
+        [t('dock.kvTarget'), String(push.remote ?? ''), 'mono'],
+        [t('dock.kvBranch'), String(push.branch ?? ''), 'mono'],
+      ]} />}
+      <ProvenanceLines payload={q.payload} />
       <JudgeModelFailure q={q} top={top} />
     </DecisionShell>
   )
@@ -187,7 +222,7 @@ function ProposalStampCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   )
 }
 
-function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+function PushCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const p = q.payload
   // gap A6：「包含 N 个提交 · N 个阶段的产物」取宿主载荷；提交数未知（null，从未推送）只写阶段，旧卡没有计数不出这一行。
@@ -195,19 +230,89 @@ function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     typeof p.commit_count === 'number' ? t('dock.includedCommits', { count: p.commit_count }) : null,
     typeof p.stage_count === 'number' ? t('dock.includedStages', { count: p.stage_count }) : null,
   ].filter((part): part is string => part !== null)
+  // owner-followups-1015 #13（ADR 0093 后续裁决）：推送是日常操作，可「允许本项目」——记 远程 + 基线分支，
+  // 之后 ⌘K 与 Agent 终端推送同一目标不再问。默认不勾（默认每次问）；键盘批准仍对推送无效。
+  const [remember, setRemember] = useState(false)
+  const remote = String(p.remote ?? 'origin')
+  const baseline = String(p.baseline ?? 'main')
   return (
-    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.publish')} sub={t('dock.publishSub')}
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.push')} sub={t('dock.pushSub')}
       actions={<>
-        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectPublish(q.id)}>{t('cards.reject')}</SettleButton>
-        {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键——键盘批准对 publish 无效（decisions.ts 守卫同步拦截） */}
-        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}</SettleButton>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectPush(q.id)}>{t('cards.reject')}</SettleButton>
+        {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键——键盘批准对 push 无效（decisions.ts 守卫同步拦截） */}
+        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPush(q.id, remember)}>{t('cards.pushConfirm')}</SettleButton>
       </>}>
       <KeyValues rows={[
-        [t('dock.kvBaseline'), String(p.baseline ?? 'main'), 'mono'],
-        [t('dock.kvTarget'), String(p.remote ?? 'origin'), 'mono'],
+        [t('dock.kvBaseline'), baseline, 'mono'],
+        [t('dock.kvTarget'), remote, 'mono'],
         ...(included.length ? [[t('dock.kvIncluded'), included.join(' · ')] as [string, string]] : []),
       ]} />
-      <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.publishWarn'))}</div>
+      <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.pushWarn'))}</div>
+      <label className="dock-check"><Checkbox data-remember="push" checked={remember} onCheckedChange={(v) => setRemember(v === true)} />
+        {t('cards.pushRemember', { remote, branch: baseline })}</label>
+    </DecisionShell>
+  )
+}
+
+function ReleaseCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const pushToast = useUiStore((s) => s.pushToast)
+  const p = q.payload
+  const name = String(p.name ?? '')
+  const cwd = String(p.cwd ?? '')
+  const credentials = Array.isArray(p.credentials) ? p.credentials.map(String) : []
+  // owner-followups-1015 #15（components D8「发布确认」）：执行负责人登记的发布目标。必问、永不记忆——卡上没有
+  // 「允许本项目」，键盘批准无效（decisions.ts 同步拦截），只认点「确认发布」。卡面抄的是请求时的命令；
+  // 登记在此之后被改过，宿主拒绝执行（release_target_changed），负责人批的必须是他看到的那条。
+  // 左侧「打开设置·发布」只是导航（补凭据 / 看命令），不是裁决。
+  return (
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.release')} sub={t('dock.releaseSub')}
+      lead={<DecisionButton variant="ghost" data-release-open onClick={() => openReleaseSettings(String(p.target_id ?? ''))}>
+        <Icon name="settings" size={12} />{t('dock.openRelease')}</DecisionButton>}
+      actions={<>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectRelease(q.id)}>{t('cards.reject')}</SettleButton>
+        <SettleButton qid={q.id} variant="danger" data-release-confirm run={async () => {
+          await api.confirmRelease(q.id)
+          pushToast(t('cards.released', { name }), 'ok')
+        }}>{t('cards.releaseConfirm')}</SettleButton>
+      </>}>
+      <KeyValues rows={[
+        [t('dock.kvTarget'), name],
+        [t('dock.kvCommand'), String(p.command ?? ''), 'mono'],
+        [t('dock.kvCwd'), cwd || t('release.cwdRoot'), cwd ? 'mono' : undefined],
+        [t('dock.kvCredentials'), credentials.length ? credentials.join(' · ') : t('dock.credentialsNone'), credentials.length ? 'mono' : undefined],
+      ]} />
+      <div className="dock-warn"><Icon name="warn" size={14} />{t('cards.releaseWarn')}</div>
+    </DecisionShell>
+  )
+}
+
+function ReleaseTargetCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const pushToast = useUiStore((s) => s.pushToast)
+  const p = q.payload
+  const name = String(p.name ?? '')
+  const cwd = String(p.cwd ?? '')
+  const credentials = Array.isArray(p.credentials) ? p.credentials.map(String) : []
+  // owner-followups-1015 #16（components D8「登记发布目标」）：Agent 在聊天里拟的发布目标。批准前不落库；托管不代批
+  // （卡留在负责人坞里）。键盘批准无效（decisions.ts 同步拦截），只认点「登记」——登记后托管可代批执行这条命令。
+  // 卡面只有凭据名：值不从聊天里取，批准后到设置·发布录入。
+  return (
+    <DecisionShell qid={q.id} cat="warn" icon="publish" title={t('cards.releaseTarget')} sub={t('dock.releaseTargetSub')}
+      actions={<>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectReleaseTargetCard(q.id)}>{t('cards.reject')}</SettleButton>
+        <SettleButton qid={q.id} variant="primary" data-release-target-approve run={async () => {
+          await api.approveReleaseTargetCard(q.id)
+          pushToast(t('cards.releaseTargetRegistered', { name }), 'ok')
+        }}>{t('cards.releaseTargetApprove')}</SettleButton>
+      </>}>
+      <KeyValues rows={[
+        [t('dock.kvTarget'), name],
+        [t('dock.kvCommand'), String(p.command ?? ''), 'mono'],
+        [t('dock.kvCwd'), cwd || t('release.cwdRoot'), cwd ? 'mono' : undefined],
+        [t('dock.kvCredentials'), credentials.length ? credentials.join(' · ') : t('dock.credentialsNone'), credentials.length ? 'mono' : undefined],
+      ]} />
+      <p className="dock-hint">{t('cards.releaseTargetHint')}</p>
     </DecisionShell>
   )
 }
@@ -363,7 +468,9 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stamp' && p.sub === 'quality_revalidation') return <QualityRevalidation q={q} top={top} />
   if (q.kind === 'stamp' && !p.proposal_id) return <StageStampCard q={q} top={top} />
   if (q.kind === 'stamp') return <ProposalStampCard q={q} top={top} />
-  if (q.kind === 'publish') return <PublishCard q={q} top={top} />
+  if (q.kind === 'push') return <PushCard q={q} top={top} />
+  if (q.kind === 'release') return <ReleaseCard q={q} top={top} />
+  if (q.kind === 'release_target') return <ReleaseTargetCard q={q} top={top} />
   if (q.kind === 'worktree') return <WorktreeCard q={q} top={top} />
   if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') return <ActionRecovery q={q} top={top} />
   if (q.kind === 'recovery') return <RecoveryCard q={q} top={top} />

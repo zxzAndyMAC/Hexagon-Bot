@@ -1558,16 +1558,21 @@ impl HttpProvider {
         Err(supplier_failure(status, &body))
     }
 
-    fn api_key(&self) -> Result<String, ProviderError> {
-        self.creds
-            .get(&self.key_name)
-            .map_err(|e| match e {
-                crate::credentials::CredError::Missing(name) => {
-                    ProviderError::MissingCredential(name)
-                }
-                other => ProviderError::CredentialStore(other.to_string()),
-            })?
-            .ok_or_else(|| ProviderError::MissingCredential(self.key_name.clone()))
+    /// 本次请求的钥匙；`None` = 本机回环端点免钥匙（票 25，不带鉴权头）。
+    /// 非回环且无钥匙仍是 MissingCredential（fail-closed，不发请求）。
+    fn api_key(&self) -> Result<Option<String>, ProviderError> {
+        let key = match self.creds.get(&self.key_name) {
+            Ok(k) => k,
+            Err(crate::credentials::CredError::Missing(_)) => None,
+            Err(other) => return Err(ProviderError::CredentialStore(other.to_string())),
+        };
+        match crate::provider_loopback::decide(key, &self.base_url) {
+            crate::provider_loopback::Auth::Key(k) => Ok(Some(k)),
+            crate::provider_loopback::Auth::Keyless => Ok(None),
+            crate::provider_loopback::Auth::Missing => {
+                Err(ProviderError::MissingCredential(self.key_name.clone()))
+            }
+        }
     }
 
     /// 响应是否 SSE 流（回退判据：不流式的兼容端点直接回 JSON 全量）。
@@ -1673,7 +1678,7 @@ impl ModelProvider for HttpProvider {
         let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
-                let url = format!("{}/v1/messages", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let body = anthropic_shape::to_request(
                     req,
@@ -1681,10 +1686,8 @@ impl ModelProvider for HttpProvider {
                     self.output_token_limit().unwrap_or(8_192),
                     &self.server_tools(&req.model_slot),
                 );
-                let mut resp = self
-                    .agent
-                    .post(&url)
-                    .header("x-api-key", &key)
+                let post = self.agent.post(&url);
+                let mut resp = crate::provider_loopback::header(post, "x-api-key", key.as_deref())
                     .header("anthropic-version", "2023-06-01")
                     .send_json(&body)
                     .map_err(Self::map_err)
@@ -1693,19 +1696,19 @@ impl ModelProvider for HttpProvider {
                 anthropic_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
             ProviderKind::OpenAi => {
-                let url = format!("{}/chat/completions", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
                 // Reliability 13: the same advertised bound must be sent to
                 // the provider; relying on its default makes reservations false.
                 self.apply_openai_output_limit(&mut body);
-                let mut resp = self
-                    .agent
-                    .post(&url)
-                    .header("Authorization", &format!("Bearer {key}"))
-                    .send_json(&body)
-                    .map_err(Self::map_err)
-                    .and_then(Self::check_response)?;
+                let bearer = key.as_deref().map(|k| format!("Bearer {k}"));
+                let post = self.agent.post(&url);
+                let mut resp =
+                    crate::provider_loopback::header(post, "Authorization", bearer.as_deref())
+                        .send_json(&body)
+                        .map_err(Self::map_err)
+                        .and_then(Self::check_response)?;
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                 openai_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
@@ -1725,7 +1728,7 @@ impl ModelProvider for HttpProvider {
         let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
-                let url = format!("{}/v1/messages", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let mut body = anthropic_shape::to_request(
                     req,
@@ -1734,10 +1737,8 @@ impl ModelProvider for HttpProvider {
                     &self.server_tools(&req.model_slot),
                 );
                 body["stream"] = serde_json::json!(true);
-                let mut resp = self
-                    .agent
-                    .post(&url)
-                    .header("x-api-key", &key)
+                let post = self.agent.post(&url);
+                let mut resp = crate::provider_loopback::header(post, "x-api-key", key.as_deref())
                     .header("anthropic-version", "2023-06-01")
                     .send_json(&body)
                     .map_err(Self::map_err)
@@ -1768,7 +1769,7 @@ impl ModelProvider for HttpProvider {
                     .map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::OpenAi => {
-                let url = format!("{}/chat/completions", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
                 // Reliability 13: streaming uses the same enforced bound as complete().
@@ -1776,13 +1777,13 @@ impl ModelProvider for HttpProvider {
                 body["stream"] = serde_json::json!(true);
                 // 末块带 usage（OpenAI 系端点通用支持；不识别的端点忽略字段）
                 body["stream_options"] = serde_json::json!({"include_usage": true});
-                let mut resp = self
-                    .agent
-                    .post(&url)
-                    .header("Authorization", &format!("Bearer {key}"))
-                    .send_json(&body)
-                    .map_err(Self::map_err)
-                    .and_then(Self::check_response)?;
+                let bearer = key.as_deref().map(|k| format!("Bearer {k}"));
+                let post = self.agent.post(&url);
+                let mut resp =
+                    crate::provider_loopback::header(post, "Authorization", bearer.as_deref())
+                        .send_json(&body)
+                        .map_err(Self::map_err)
+                        .and_then(Self::check_response)?;
                 if !Self::is_sse(&resp) {
                     let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                     return emit_fallback(
@@ -1830,7 +1831,7 @@ impl ModelProvider for HttpProvider {
             &self.agent,
             &self.base_url,
             &self.model,
-            &key,
+            key.as_deref(),
             state,
             options,
         )
@@ -1855,7 +1856,7 @@ fn jev_choice(
     agent: &ureq::Agent,
     base: &str,
     model: &str,
-    key: &str,
+    key: Option<&str>,
     state: &str,
     options: &[(&str, &str)],
 ) -> Result<ChatResponse, ProviderError> {
@@ -1882,12 +1883,12 @@ fn jev_choice(
         }
     });
     let url = systemone_url(base);
-    let mut resp = agent
-        .post(&url)
-        .header("Authorization", &format!("Bearer {key}"))
-        .send_json(&body)
-        .map_err(HttpProvider::map_err)
-        .and_then(HttpProvider::check_response)?;
+    let bearer = key.map(|k| format!("Bearer {k}"));
+    let mut resp =
+        crate::provider_loopback::header(agent.post(&url), "Authorization", bearer.as_deref())
+            .send_json(&body)
+            .map_err(HttpProvider::map_err)
+            .and_then(HttpProvider::check_response)?;
     let v: Value = resp.body_mut().read_json().map_err(HttpProvider::map_err)?;
     let choice = v["answers"]["route"]["choice"]
         .as_str()
@@ -2230,12 +2231,13 @@ mod tests {
         assert!(matches!(&r.content[1], ContentBlock::ToolUse { name, .. } if name == "fs_read"));
     }
 
-    /// HttpProvider：无 key → MissingCredential（不发请求）。
+    /// HttpProvider：非回环 + 无 key → MissingCredential（不发请求）。
+    /// 票 25：地址曾是 127.0.0.1——回环免钥匙之后它会真的发请求，换成远端地址。
     #[test]
     fn http_provider_missing_key_fails_closed() {
         let p = HttpProvider::new(
             ProviderKind::OpenAi,
-            "http://127.0.0.1:1".into(),
+            "http://remote.invalid:1".into(),
             "m".into(),
             "model/chat".into(),
             Arc::new(crate::credentials::MemoryStore::default()),
@@ -2243,6 +2245,46 @@ mod tests {
         );
         let err = p.complete(&empty_req()).unwrap_err();
         assert!(matches!(err, ProviderError::MissingCredential(_)));
+    }
+
+    /// 票 25：回环 + 无 key → 对话请求照发、不带 Authorization（本机 Ollama / LM Studio）。
+    #[test]
+    fn http_provider_loopback_without_key_sends_no_auth_header() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = [0; 8192];
+            let n = socket.read(&mut bytes).unwrap();
+            let body = r#"{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#;
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            String::from_utf8_lossy(&bytes[..n]).into_owned()
+        });
+        let p = HttpProvider::new(
+            ProviderKind::OpenAi,
+            format!("http://{address}/v1"),
+            "llama3".into(),
+            "provider/local".into(),
+            Arc::new(crate::credentials::MemoryStore::default()),
+            ModelMeta::default(),
+        );
+        let r = p.complete(&empty_req()).unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(
+            request.starts_with("post /v1/chat/completions"),
+            "{request}"
+        );
+        assert!(!request.contains("authorization"), "{request}");
+        assert!(matches!(&r.content[0], ContentBlock::Text { text } if text == "hi"));
     }
 
     // ---------- 票 02：SSE ----------

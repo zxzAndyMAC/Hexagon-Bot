@@ -13,7 +13,7 @@ const DECIDE = new Set<string>([
 ])
 const LAYOUT = new Set<string>([
   'commandPalette', 'settings', 'toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode',
-  'closeTab', 'focusComposer', 'nodeRail',
+  'closeTab', 'closeOtherTabs', 'closeTabsToRight', 'nextTab', 'prevTab', 'focusComposer', 'nodeRail',
 ])
 
 /** 第一条命中的规则决定分组。 */
@@ -23,7 +23,7 @@ export function keyGroupOf(id: string): KeyGroup {
   if (id.startsWith('managed') || id === 'confirmManaged' || id === 'approvalMode' || /BroadAccess$/.test(id) || id === 'modelRecoveryStop') return 'managed'
   if (/^(desktop|browser|agentScreen)/.test(id) || /(BrowserElement|DesktopScreenshot)$/.test(id) || id === 'computerModelSettings') return 'computer'
   if (id.startsWith('session')) return 'session'
-  if (id.startsWith('tree') || /FileEdits?$/.test(id) || id === 'saveFile') return 'files'
+  if (id.startsWith('tree') || /FileEdits?$/.test(id) || id === 'saveFile' || id === 'copyPath' || id === 'insertPath' || id === 'revealPath' || id === 'openWith') return 'files'
   return 'other'
 }
 

@@ -19,7 +19,7 @@ import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
-import { CallStatus, ToolExecCard } from './ExecCard'
+import { CallStatus, openExecFile, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
 import { delegationLabel } from '../delegationLabel'
@@ -27,6 +27,10 @@ import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../time
 import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
 import { NodeRail } from './NodeRail'
+import { MessageContextMenu } from './MessageMenu'
+import { FileContextMenu } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
+import { RailEvents } from '../messageActions'
 import { modelDisplayName } from '../modelpick'
 import type { TFunction } from 'i18next'
 import './timeline.css'
@@ -38,6 +42,8 @@ import { TooltipProvider } from './ui/tooltip'
 import type { AtomOptions } from '../timelineAtoms'
 import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
 import { FreshStart } from './FreshStart'
+import { ArtistNotice, ARTIST_NOTICE_KIND, ARTIST_PROMPT_FAILED_KIND } from './ArtistNotice'
+import { ArtistProposalCard, ARTIST_PROPOSAL_KIND } from './ArtistProposal'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
 import { useDelegation } from '../useDelegation'
@@ -261,6 +267,8 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
   if (MODEL_RECOVERY_KINDS.includes(sub)) return <ModelRecoveryRow item={item} />
+  if (sub === ARTIST_NOTICE_KIND || sub === ARTIST_PROMPT_FAILED_KIND) return <ArtistNotice item={item} />
+  if (sub === ARTIST_PROPOSAL_KIND) return <ArtistProposalCard item={item} />
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
@@ -278,7 +286,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // C4 系统行：12px ink-3、两侧细线；高风险子类（SYS_HIGH_RISK / 回合失败）文字 --red。
   return (
     <div className={`sysrow tl-sys${highRisk ? ' risk' : ''}`}>
-      <span className="syslabel tl-sys-l" style={highRisk ? { color: 'var(--red)' } : undefined} title={note ? `${label} · ${note}` : label}>
+      <span className="syslabel tl-sys-l" style={highRisk ? { color: 'var(--red-ink)' } : undefined} title={note ? `${label} · ${note}` : label}>
         {label}
         {note && <span className="dim3"> · {note}</span>}
       </span>
@@ -371,15 +379,20 @@ function DeliveryCard({ item }: { item: TimelineItem }) {
   const sub = [String(p.kind ?? ''), version > 0 ? `v${version}` : ''].filter(Boolean).join(' · ')
   // 选中态（canvas#artifact，票 16a 补）：该产物正是画布当前页签时 1.5px accent 环，与侧栏成员行「当前打开」同理
   const current = useUiStore((s) => path !== '' && s.canvasOpen && s.activeTab === `art:${path}`)
+  const open = () => { if (path) openTab({ id: `art:${path}`, kind: 'artifact', title: path, path }) }
+  // #32（2026-10-21 负责人裁决）：右键 = 共用文件菜单；没有路径的交付卡不挂菜单（FileContextMenu 一项不剩原样返回）
+  const target = useProjectFileTarget(path || null, { onOpen: path ? open : undefined, artifact: true })
   return (
-    <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
-      data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
-      onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}>
-      <span className="fi"><Icon name="file-text" size={16} /></span>
-      <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
-      <span className={`chip ${chip.tone}`}>{t(chip.key)}</span>
-      <Icon name="chevron-right" size={14} />
-    </button>
+    <FileContextMenu {...target}>
+      <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
+        data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
+        onClick={open}>
+        <span className="fi"><Icon name="file-text" size={16} /></span>
+        <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
+        <span className={`chip ${chip.tone}`}>{t(chip.key)}</span>
+        <Icon name="chevron-right" size={14} />
+      </button>
+    </FileContextMenu>
   )
 }
 
@@ -399,12 +412,13 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
     if (path) openTab({ id: `file:${path}`, kind: 'file', title: path.split('/').pop() || path, path })
   }
   return (
-    <div className="tl-me" aria-label={t('timeline.owner')}>
+    <MessageContextMenu eventId={item.event.id} body={m.body} className="tl-me" aria-label={t('timeline.owner')}>
       {m.element_refs?.map(reference => <ElementReference key={reference.id} reference={reference} />)}
       {/* 票 03：图片附件引用 chip（D3 只读形，在气泡上方）——字节在 .hexagon/inbox/，渲染引用不渲染图本体 */}
       {m.attachments?.length > 0 && (
         <div className="tl-me-files">
-          {m.attachments.map((a) => <CodeChip key={a.path} file>{a.name}</CodeChip>)}
+          {/* #32：data-file-path 让消息菜单在 chip 上右键时换成文件菜单（MessageMenu） */}
+          {m.attachments.map((a) => <span key={a.path} data-file-path={a.path} className="contents"><CodeChip file>{a.name}</CodeChip></span>)}
         </div>
       )}
       <div className="tl-me-row">
@@ -420,7 +434,7 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
           {queued && <span className="chip info">{t('timeline.steeringQueued')}</span>}
         </div>
       )}
-    </div>
+    </MessageContextMenu>
   )
 }
 
@@ -435,7 +449,7 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
   const title = member?.role ?? m.author
   const time = fmtTime(item.event.created_at)
   return (
-    <div className="tl-msg">
+    <MessageContextMenu eventId={item.event.id} body={m.body} className="tl-msg">
       {member && (
         <button type="button" className="tl-face" title={t('agent.openTab')} aria-label={`${t('agent.openTab')} · ${member.role}`}
           onClick={() => openTab({ id: `agent:${member.id}`, kind: 'agent', title: member.role, agentId: member.id, role: member.role })}>
@@ -466,7 +480,7 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
         <ThinkingRow text={m.thinking} />
         <CollapsibleBody text={m.body} unclamped={story} atoms={atoms} />
       </div>
-    </div>
+    </MessageContextMenu>
   )
 }
 
@@ -622,14 +636,15 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
   fresh?: boolean
 }) {
   const { t } = useTranslation()
-  const openTab = useUiStore((s) => s.openTab)
   // 计数按调用对（called 吸收 result），不按事件条数——旧版 2N 的数会翻倍。
   const calls = useMemo(() => pairToolCalls(items).map((call) => callIndex?.get(call.called.event.id) ?? call), [items, callIndex])
   const files = useMemo(() => {
-    const seen = new Set<string>()
+    // #32：记下是不是产物写入——artifact_write 的 path 是 `.hexagon/` 内相对（文件菜单要换成盘上路径）
+    const seen = new Map<string, boolean>()
     for (const c of calls) {
-      const path = toolFilePath(c.called.event.payload as Record<string, unknown>)
-      if (path) seen.add(path)
+      const payload = c.called.event.payload as Record<string, unknown>
+      const path = toolFilePath(payload)
+      if (path && !seen.has(path)) seen.set(path, payload.tool === 'artifact_write')
     }
     return [...seen]
   }, [calls])
@@ -654,18 +669,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
           })}
           {files.length > 0 && (
             <div className="tchip-files">
-              {files.map((path, i) => (
-                <button
-                  key={path}
-                  type="button"
-                  className="chip chip-btn mono"
-                  style={fresh ? { animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` } : undefined}
-                  title={path}
-                  onClick={() => openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
-                >
-                  {path.split('/').pop() || path}
-                </button>
-              ))}
+              {files.map(([path, artifact], i) => <ToolFileChip key={path} path={path} artifact={artifact} delayIdx={fresh ? i : null} />)}
             </div>
           )}
         </div>
@@ -673,6 +677,28 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
     </div>
   )
 })
+
+/**
+ * 工具调用文件 chip（C7 文件 chip 行）；右键 = 共用文件菜单（#32）。根外的绝对路径只留「打开」。
+ * 点开：产物写入开产物页签，仓库路径（fs_read / fs_write）开文件页签——同执行卡卡头（#33 L4）。
+ */
+function ToolFileChip({ path, artifact, delayIdx }: { path: string; artifact: boolean; delayIdx: number | null }) {
+  const open = () => openExecFile({ path, open: artifact ? 'artifact' : 'file' })
+  const target = useProjectFileTarget(path, { onOpen: open, artifact })
+  return (
+    <FileContextMenu {...target}>
+      <button
+        type="button"
+        className="chip chip-btn mono"
+        style={delayIdx != null ? { animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(delayIdx, 10) * 60}ms both` } : undefined}
+        title={path}
+        onClick={open}
+      >
+        {path.split('/').pop() || path}
+      </button>
+    </FileContextMenu>
+  )
+}
 
 export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onToggle }: {
   items: TimelineItem[]
@@ -889,6 +915,8 @@ export function Timeline() {
     { hostNodes: projectRoot != null ? nodes : undefined, hostWatermark: nodesWatermark, filter })), [projectRoot, nodes, nodesWatermark, rows, pending.length, timeline, filter])
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
+  // owner-followups-1015 #08：消息右键「在节点轨中定位」只对有刻度的消息可用。
+  const railEvents = useMemo(() => new Set(marks.flatMap(m => (m.merged ?? [m]).flatMap(x => x.eventId != null ? [x.eventId] : []))), [marks])
   const areaRef = useRef<HTMLDivElement>(null)
   // 票 16c：虚拟化重挂把聚焦行移出 DOM 时，焦点放回原行（退路：滚动容器），不掉到 body。
   useEffect(() => {
@@ -1100,6 +1128,7 @@ export function Timeline() {
 
   return (
     <TooltipProvider>
+    <RailEvents.Provider value={railEvents}>
     <FreshContext.Provider value={fresh}>
     <div className="tl" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* 过滤（A7 全部 / 消息 / 决策）与导出钮同排，贴在对话列上沿（interaction §1）。
@@ -1172,6 +1201,7 @@ export function Timeline() {
       </div>
     </div>
     </FreshContext.Provider>
+    </RailEvents.Provider>
     </TooltipProvider>
   )
 }

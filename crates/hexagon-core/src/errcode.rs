@@ -84,7 +84,9 @@ impl_error_code!(
     Turn,
     Tool,
     Artifact,
-    Publish,
+    Push,
+    Release,
+    ReleaseRun,
     Autonomy,
     Proposal,
     Review,
@@ -165,16 +167,40 @@ impl ErrorCode for crate::provider::ProviderError {
         variant_code(self.cause())
     }
 }
-impl_error_code!(crate::provider_admin::AdminError, Providers, Cred, Json);
+// owner-followups-1015 #03：目录失败的码面就是原因词（authentication / missing_credential …），
+// 与连接检测同词——界面复用 `wizard.probe.reason.*`，不另立 `errors.catalog`。
+impl ErrorCode for crate::provider_admin::AdminError {
+    fn code(&self) -> String {
+        use crate::provider_admin::AdminError as E;
+        match self {
+            E::Providers(e) => e.code(),
+            E::Cred(e) => e.code(),
+            E::Json(e) => e.code(),
+            E::Catalog { code, .. } => (*code).to_string(),
+            _ => variant_code(self),
+        }
+    }
+}
 impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
+impl_error_code!(crate::push::PushError, Sqlite, Cards, Db, Trace, Cred, Git,);
+// owner-followups-1015 #14：登记判定的拒绝码（release_name_invalid / release_cwd_outside /
+// release_secret_in_target …），界面走 `errors.<code>`。
 impl_error_code!(
-    crate::publish::PublishError,
+    crate::release_targets::ReleaseError,
     Sqlite,
-    Cards,
-    Db,
     Trace,
     Cred,
-    Git,
+    Json,
+);
+// owner-followups-1015 #15：执行发布的拒绝 / 失败码（release_target_changed / release_credential_missing /
+// release_command_failed …），界面走 `errors.<code>`；登记判定码递归到 ReleaseError。
+impl_error_code!(
+    crate::release::ReleaseRunError,
+    Target,
+    Cards,
+    Trace,
+    Cred,
+    Sqlite,
 );
 impl_error_code!(
     crate::review::ReviewError,
@@ -184,6 +210,16 @@ impl_error_code!(
     Cards,
     Orch,
     Sqlite,
+);
+impl_error_code!(crate::avatars::AvatarError, Io, Sqlite,);
+impl_error_code!(
+    crate::artist_proposal::ArtistError,
+    Avatar,
+    Io,
+    Json,
+    Trace,
+    Sqlite,
+    Db,
 );
 impl_error_code!(crate::roles::RoleError, Sqlite, Json, Preset, Db, Io,);
 impl_error_code!(crate::templates::TemplateError, Io, Json, Preset,);
@@ -210,6 +246,11 @@ impl_error_code!(
     Artifact,
 );
 impl_error_code!(crate::files::RepoFsError, Io);
+// owner-followups-1015 #07：揭示判定的拒绝原因码（reveal_outside_project / reveal_missing / reveal_launch），
+// 界面走 `errors.<code>`。
+impl_error_code!(crate::reveal::RevealError);
+// owner-followups-1015 #31：「打开方式」拒绝 / 失败码（open_with_outside_project / _missing / _unsupported / _launch）。
+impl_error_code!(crate::open_with::OpenWithError);
 impl_error_code!(crate::trace::TraceError, Db, Sqlite, Json, Io, Cards,);
 impl_error_code!(
     crate::turn::TurnError,

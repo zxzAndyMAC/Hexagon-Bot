@@ -34,6 +34,9 @@ export function RolesStep(p: {
   onEdit: (tp: RoleTemplate, def: RoleDef) => void
   onRestore: (name: string) => void
   rolesBusy: boolean
+  /** 票 17：向导内存里的角色头像（按角色名）。 */
+  avatars: Record<string, string>
+  onAvatar: (name: string, url: string | null) => void
   doc: ProvidersView
   aiDraft: { label: string; title: string; disabled: boolean; onClick: () => void }
   newRole: { onDone: (def: RoleDef) => void; onCancel: () => void; onBusy: (b: boolean) => void }
@@ -115,7 +118,7 @@ export function RolesStep(p: {
                       onCheckedChange={(v) => p.onToggle(name, v === true)}
                     />
                   </span>
-                  <Avatar name={name} size={24} />
+                  <Avatar name={name} size={24} src={p.avatars[name]} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <b className="truncate text-[13px] font-medium">{name}</b>
@@ -147,6 +150,8 @@ export function RolesStep(p: {
               busy={p.rolesBusy}
               onChange={(def) => p.onEdit(sel, def)}
               onRestore={() => p.onRestore(sel.def.name)}
+              avatarUrl={p.avatars[sel.def.name] ?? null}
+              onAvatar={(url) => p.onAvatar(sel.def.name, url)}
             />
           ) : (
             <div className="pt-10 text-center text-[13px] text-ink-3">{t('wizard.roles.pickHint')}</div>
@@ -243,7 +248,7 @@ function NewRoleForm({ names, doc, onDone, onCancel, onBusy }: {
         <EntityChips value={skills} onChange={setSkills} source="skills" />
       </div>
       <AdvancedGlobs open={adv} onToggle={() => setAdv((v) => !v)} value={globs} onChange={setGlobs} />
-      {err && <div role="alert" className="text-[12px] text-red">{err}</div>}
+      {err && <div role="alert" className="text-[12px] text-red-ink">{err}</div>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <Button size="sm" variant="ghost" onClick={onCancel}>{t('agent.cancel')}</Button>
         <Button size="sm" data-create-role disabled={!name.trim() || drafting} loading={saving} onClick={create}>

@@ -80,6 +80,18 @@ function mapPoint(x: number, y: number, { w, h, aspect }: Base): TargetPoint | n
   return { left, top }
 }
 
+/** drag 序号底衬挂在圈外的哪一角（owner-followups-1015 #30 第 1 项）。 */
+export type OrdinalCorner = 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+
+/**
+ * 序号底衬朝截图中心那一角：圈在右半边就挂左侧，在上半边就挂下方（正中及左下半默认右上）。
+ * 为什么：缩略框 overflow-hidden，固定挂右上时贴右 / 上边的圈序号会被裁掉，又回到「认不出起终点」；
+ * 底衬也不能放圈心——会盖住要点的目标本身（被否决：圈内实心底衬）。
+ */
+export function ordinalCorner({ left, top }: TargetPoint): OrdinalCorner {
+  return `${top < 0.5 ? 'bottom' : 'top'}-${left > 0.5 ? 'left' : 'right'}`
+}
+
 /** 实际加载的像素必须就是记录尺寸的那张图（同一观察），否则换算基准不成立。 */
 export function sameImageSize(natural: { width: number; height: number }, imageWidth: unknown, imageHeight: unknown): boolean {
   return natural.width > 0 && natural.width === imageWidth && natural.height === imageHeight

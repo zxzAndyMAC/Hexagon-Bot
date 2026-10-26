@@ -19,6 +19,8 @@ import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
 import { dirName, type DraftSeed } from './wizard/draft'
+import { OpenWithSubmenu } from './OpenWithMenu'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 
 async function pickDirectory(): Promise<string | null> {
   if (!isTauri) return null
@@ -203,8 +205,8 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
   )
   const info = (
     <div className="min-w-0 flex-1 text-left">
-      <div className={cn('truncate text-[13px] font-medium', missing && 'text-red')}>{r.name}</div>
-      <div className={cn('truncate font-mono text-[12px]', missing ? 'text-red' : 'text-ink-3')} title={r.dir}>{r.dir}</div>
+      <div className={cn('truncate text-[13px] font-medium', missing && 'text-red-ink')}>{r.name}</div>
+      <div className={cn('truncate font-mono text-[12px]', missing ? 'text-red-ink' : 'text-ink-3')} title={r.dir}>{r.dir}</div>
     </div>
   )
   const removeBtn = (
@@ -221,15 +223,26 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
       </li>
     )
   }
+  // #32（2026-10-21 负责人裁决「启动页最近项目右键加打开方式」）：项目级菜单 = 打开 · 打开方式 ▸。
+  // 打开方式走 recent_* 命令：core 只认 app 自己 recents 记录里的目录为根，界面传的 dir 只是查表键（不在记录里即拒）。
+  // 目录已删的行（上面 missing 分支）没有盘上目录，不挂菜单；没有路径类项（复制 / 揭示）——启动页没有项目根可依。
   return (
-    <li className={cn(row, 'recent-row hx-press hx-focus cursor-pointer live:hover:bg-hover')} tabIndex={0} aria-busy={opening || undefined}
-      onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); onOpen() } }}
-    >
-      {icon}{info}
-      <Badge>{t(`launch.mode_${r.mode}`)}</Badge>
-      {when && <span className="flex-none text-[12px] text-ink-3">{when}</span>}
-      {opening ? <Spinner /> : <span className="opacity-0 group-hover/rec:opacity-100 group-focus-within/rec:opacity-100">{removeBtn}</span>}
-    </li>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <li className={cn(row, 'recent-row hx-press hx-focus cursor-pointer live:hover:bg-hover')} tabIndex={0} aria-busy={opening || undefined}
+          onClick={onOpen}
+          onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); onOpen() } }}
+        >
+          {icon}{info}
+          <Badge>{t(`launch.mode_${r.mode}`)}</Badge>
+          {when && <span className="flex-none text-[12px] text-ink-3">{when}</span>}
+          {opening ? <Spinner /> : <span className="opacity-0 group-hover/rec:opacity-100 group-focus-within/rec:opacity-100">{removeBtn}</span>}
+        </li>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem data-ctx-item="open" onSelect={onOpen}>{t('ctx.open')}</ContextMenuItem>
+        <OpenWithSubmenu path={r.dir} recent />
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }

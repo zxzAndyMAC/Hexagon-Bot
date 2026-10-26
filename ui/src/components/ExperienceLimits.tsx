@@ -35,7 +35,7 @@ export function ExperienceLimits({ onSaved }: { onSaved: () => void }) {
       </Field>)}
     </div>
     <div className="mt-3 flex items-center gap-2">
-      {error ? <p role="alert" className="min-w-0 flex-1 text-[12px] text-red">{error}</p> : <span className="flex-1" />}
+      {error ? <p role="alert" className="min-w-0 flex-1 text-[12px] text-red-ink">{error}</p> : <span className="flex-1" />}
       <Button size="sm" disabled={busy || !limits} loading={busy} onClick={() => void save()}
         title={`${t('experience.saveLimits')} (${formatBinding(bindingFor('saveExperienceLimits'))})`}>{t('experience.saveLimits')}</Button>
     </div>

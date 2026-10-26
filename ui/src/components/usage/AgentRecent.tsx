@@ -8,7 +8,7 @@ import { agentVar } from '../../colors'
 import { AreaTrend } from './AreaTrend'
 import { ChartCard, ChartSkeleton, UsageEmpty, UsageLoadError } from './parts'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
-import { bucketTick, dayAxis, daysAgo, fmtTok, topAgentRows } from '../../usage'
+import { bucketTick, dayAxis, daysAgo, fmtTok, topAgentRows, usageActorName } from '../../usage'
 
 const TOP_N = 4
 const SPANS = [7, 14, 30] as const
@@ -32,7 +32,7 @@ export function AgentRecent({ refreshKey }: { refreshKey: number }) {
   }, [days])
   useEffect(() => { void load() }, [load, refreshKey])
 
-  const roleOf = (id: string) => team.find((m) => m.id === id)?.role ?? id
+  const roleOf = (id: string) => usageActorName(team, id)
   const { agents, rows } = topAgentRows(series, dayAxis(daysAgo(days - 1), daysAgo(0)), TOP_N)
   const lines = agents.map((id) => ({ key: id, label: roleOf(id), color: agentVar(id) }))
   const aria = t('usageDetail.agentsAria', {
