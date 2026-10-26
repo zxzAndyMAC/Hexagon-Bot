@@ -28,6 +28,7 @@ import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
 import { NodeRail } from './NodeRail'
 import { MessageContextMenu } from './MessageMenu'
+import { FileContextMenu, useProjectFileTarget } from './FileMenu'
 import { RailEvents } from '../messageActions'
 import { modelDisplayName } from '../modelpick'
 import type { TFunction } from 'i18next'
@@ -377,15 +378,20 @@ function DeliveryCard({ item }: { item: TimelineItem }) {
   const sub = [String(p.kind ?? ''), version > 0 ? `v${version}` : ''].filter(Boolean).join(' · ')
   // 选中态（canvas#artifact，票 16a 补）：该产物正是画布当前页签时 1.5px accent 环，与侧栏成员行「当前打开」同理
   const current = useUiStore((s) => path !== '' && s.canvasOpen && s.activeTab === `art:${path}`)
+  const open = () => { if (path) openTab({ id: `art:${path}`, kind: 'artifact', title: path, path }) }
+  // #32（2026-10-21 负责人裁决）：右键 = 共用文件菜单；没有路径的交付卡不挂菜单（FileContextMenu 一项不剩原样返回）
+  const target = useProjectFileTarget(path || null, { onOpen: path ? open : undefined })
   return (
-    <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
-      data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
-      onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}>
-      <span className="fi"><Icon name="file-text" size={16} /></span>
-      <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
-      <span className={`chip ${chip.tone}`}>{t(chip.key)}</span>
-      <Icon name="chevron-right" size={14} />
-    </button>
+    <FileContextMenu {...target}>
+      <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
+        data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
+        onClick={open}>
+        <span className="fi"><Icon name="file-text" size={16} /></span>
+        <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
+        <span className={`chip ${chip.tone}`}>{t(chip.key)}</span>
+        <Icon name="chevron-right" size={14} />
+      </button>
+    </FileContextMenu>
   )
 }
 
@@ -629,7 +635,6 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
   fresh?: boolean
 }) {
   const { t } = useTranslation()
-  const openTab = useUiStore((s) => s.openTab)
   // 计数按调用对（called 吸收 result），不按事件条数——旧版 2N 的数会翻倍。
   const calls = useMemo(() => pairToolCalls(items).map((call) => callIndex?.get(call.called.event.id) ?? call), [items, callIndex])
   const files = useMemo(() => {
@@ -661,18 +666,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
           })}
           {files.length > 0 && (
             <div className="tchip-files">
-              {files.map((path, i) => (
-                <button
-                  key={path}
-                  type="button"
-                  className="chip chip-btn mono"
-                  style={fresh ? { animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` } : undefined}
-                  title={path}
-                  onClick={() => openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
-                >
-                  {path.split('/').pop() || path}
-                </button>
-              ))}
+              {files.map((path, i) => <ToolFileChip key={path} path={path} delayIdx={fresh ? i : null} />)}
             </div>
           )}
         </div>
@@ -680,6 +674,25 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
     </div>
   )
 })
+
+/** 工具调用文件 chip（C7 文件 chip 行）；右键 = 共用文件菜单（#32）。根外的绝对路径只留「打开」。 */
+function ToolFileChip({ path, delayIdx }: { path: string; delayIdx: number | null }) {
+  const open = () => useUiStore.getState().openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })
+  const target = useProjectFileTarget(path, { onOpen: open })
+  return (
+    <FileContextMenu {...target}>
+      <button
+        type="button"
+        className="chip chip-btn mono"
+        style={delayIdx != null ? { animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(delayIdx, 10) * 60}ms both` } : undefined}
+        title={path}
+        onClick={open}
+      >
+        {path.split('/').pop() || path}
+      </button>
+    </FileContextMenu>
+  )
+}
 
 export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onToggle }: {
   items: TimelineItem[]

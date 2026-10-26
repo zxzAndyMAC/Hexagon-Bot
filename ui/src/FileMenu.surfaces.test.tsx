@@ -11,6 +11,13 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { ArtifactList } from './components/shell/ArtifactList'
 import { Canvas } from './components/shell/Canvas'
 import { MessageContextMenu } from './components/MessageMenu'
+import { Timeline, ToolGroupRow } from './components/Timeline'
+import type { TimelineItem } from './api'
+
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
+    <div data-scroller ref={scrollerRef}>{data.map((row, index) => <div key={index}>{itemContent(index, row)}</div>)}</div>,
+}))
 import type { ArtifactRow } from './gen/ArtifactRow'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -122,5 +129,43 @@ describe('时间线消息里的 # 路径块与附件 chip（#32 表面 5、6）'
     await flush()
     await rightClick(host.querySelector('[data-plain]')!)
     expect(items()).toEqual(['copy', 'quote'])
+  })
+})
+
+const ev = (id: number, kind: TimelineItem['event']['kind'], payload: Record<string, unknown>): TimelineItem => ({
+  event: { id, project_id: 'p', kind, agent_id: 'a1', stage_run_id: null, payload, created_at: '2026-10-14T14:02:00Z' },
+  message: null,
+})
+
+describe('交付卡 C11（#32 表面 3）', () => {
+  it('右键 = 全套；「打开」= 点卡', async () => {
+    useUiStore.setState({ pending: [], streams: {}, thinkings: {}, plans: {}, streamDone: {}, stages: [], projectRoot: null, projectEpoch: 0,
+      timelineFacts: null, team: [], artifacts: [],
+      timeline: [ev(1, 'artifact_delivered', { path: 'deck/q4.pptx', version: 1, kind: 'doc', status: 'pending' })] } as never)
+    const host = await render(<Timeline />)
+    // Timeline 挂载时 dev mock 可能并入别的交付卡，按路径挑
+    await rightClick(host.querySelector('.tl-deliver[title="deck/q4.pptx"]')!)
+    expect(items()).toEqual(FULL)
+    expect(api.openWithCandidates).toHaveBeenCalledWith('deck/q4.pptx')
+    await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
+    expect(useUiStore.getState().activeTab).toBe('art:deck/q4.pptx')
+  })
+})
+
+describe('工具调用文件 chip（#32 表面 4）', () => {
+  it('右键 = 全套；根内绝对路径按相对读候选，根外绝对路径只剩「打开」', async () => {
+    const calls = [
+      ev(1, 'tool_called', { tool: 'fs_read', input: { path: '/proj/docs/brief.md' } }),
+      ev(2, 'tool_called', { tool: 'fs_read', input: { path: '/tmp/scratch.txt' } }),
+    ]
+    const host = await render(<ToolGroupRow items={calls} expanded idx={0} onToggle={() => {}} />)
+    const chips = host.querySelectorAll('.tchip-files .chip-btn')
+    await rightClick(chips[0])
+    expect(items()).toEqual(FULL)
+    expect(api.openWithCandidates).toHaveBeenCalledWith('docs/brief.md')
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await flush()
+    await rightClick(chips[1])
+    expect(items()).toEqual(['open'])
   })
 })
