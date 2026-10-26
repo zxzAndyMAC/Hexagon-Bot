@@ -15,6 +15,7 @@ import { Timeline, ToolGroupRow } from './components/Timeline'
 import type { TimelineItem } from './api'
 import { ToolExecCard } from './components/ExecCard'
 import { AgentTab } from './components/AgentTab'
+import { StageArtifacts } from './components/PendingCardParts'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -205,5 +206,20 @@ describe('Agent 详情步骤路径链接（#32 表面 8）', () => {
     expect(items()).toEqual(FULL)
     await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
     expect(useUiStore.getState().activeTab).toBe(`art:${link.title}`)
+  })
+})
+
+describe('盖章卡阶段产物证据行（#32 表面 9）', () => {
+  it('只有文件项（无「打开」、无任何裁决项）；待恢复行不挂菜单', async () => {
+    useUiStore.setState({ artifacts: [artifact('out/plan.xlsx', { stage_run_id: 'r1' }),
+      Object.assign(artifact('out/b.md', { stage_run_id: 'r1' }), { materialization: 'pending_recovery' })] })
+    const host = await render(<StageArtifacts runId="r1" />)
+    const rows = host.querySelectorAll('[data-stage-artifact]')
+    await rightClick(rows[0])
+    expect(items()).toEqual(NO_OPEN)
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await flush()
+    await rightClick(rows[1])
+    expect(menu()).toBeNull()
   })
 })

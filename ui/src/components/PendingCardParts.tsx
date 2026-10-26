@@ -17,6 +17,8 @@ import { DiffView } from './DiffView'
 import { ExperienceProposal } from './ExperienceProposal'
 import { StageEvidence } from './StageEvidence'
 import { Icon } from './Icon'
+import { FileContextMenu, useProjectFileTarget } from './FileMenu'
+import type { ArtifactRow } from '../gen/ArtifactRow'
 import { Checkbox } from './ui/checkbox'
 import { Field, Input, Textarea } from './ui/input'
 import { DecisionButton, DecisionShell, KeyValues, SettleButton } from './DecisionShell'
@@ -110,14 +112,26 @@ export function StageArtifacts({ runId }: { runId: string }) {
   if (!list.length) return null
   return (
     <div className="dock-list">
-      {list.map((a) => (
-        <div key={a.id}>
-          <Icon name="circle-check" size={14} style={{ color: 'var(--green)' }} />
-          <span className="mono" title={a.path}>{a.path}</span>
-          <span className="chip">v{a.version}</span>
-        </div>
-      ))}
+      {list.map((a) => <StageArtifactRow key={a.id} a={a} />)}
     </div>
+  )
+}
+
+/**
+ * 阶段产物证据行；右键 = 共用文件菜单的路径类项（#32，2026-10-21 负责人裁决）——只有文件项：
+ * 没有「打开」（此表面本来没有打开动作，打开走画布产物页签），更没有任何裁决项（A16b 禁区：误点代价是一次未审副作用）。
+ * 待恢复（盘上未写成）的行一项不剩 → 不挂菜单。
+ */
+function StageArtifactRow({ a }: { a: ArtifactRow }) {
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path)
+  return (
+    <FileContextMenu {...target}>
+      <div data-stage-artifact>
+        <Icon name="circle-check" size={14} style={{ color: 'var(--green)' }} />
+        <span className="mono" title={a.path}>{a.path}</span>
+        <span className="chip">v{a.version}</span>
+      </div>
+    </FileContextMenu>
   )
 }
 
