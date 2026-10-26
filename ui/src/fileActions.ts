@@ -73,9 +73,19 @@ export function projectRelPath(path: string, root: string | null): string | null
   return sep === '/' ? rel : rel.replaceAll('\\', '/')
 }
 
-/** 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径，没有项目根时退回相对路径。 */
+/**
+ * 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径。
+ * 没有项目根（打开项目后根尚未到达）时不复制、只出提示——ticket 33 P4（2026-10-25 批次审查，#29 / #30 遗留）：
+ * 原来退回复制相对路径，负责人以为拿到了绝对路径，贴到终端 / 别的应用里指错位置。被否决：等根到达再复制
+ * （剪贴板写入要在用户手势里，异步等待后浏览器会拒）。
+ */
 export async function copyProjectPath(rel: string) {
-  await copyPath(absolutePath(useUiStore.getState().projectRoot, rel))
+  const root = useUiStore.getState().projectRoot
+  if (!root) {
+    useUiStore.getState().pushToast(i18n.t('ctx.pathUnavailable'))
+    return
+  }
+  await copyPath(absolutePath(root, rel))
 }
 
 /** 在系统文件管理器中显示。越界 / 不存在由 core 拒（errors.reveal_*），这里只出 toast。 */

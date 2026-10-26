@@ -145,6 +145,16 @@ describe('文件树行右键菜单（A16b 第一批）', () => {
     expect(useUiStore.getState().toasts.at(-1)?.text).toBe('Path copied')
   })
 
+  it('复制路径：项目根未就绪时不复制相对路径，只出提示（ticket 33 P4）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await rightClick(treeitem('README.md'))
+    act(() => { useUiStore.setState({ projectRoot: null }) })
+    await pick('copyPath')
+    expect(writeText).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.at(-1)?.text).toBe(i18n.t('ctx.pathUnavailable'))
+  })
+
   it('复制路径：copyPath 键位在焦点文件树行上同样写绝对路径（#30）', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
