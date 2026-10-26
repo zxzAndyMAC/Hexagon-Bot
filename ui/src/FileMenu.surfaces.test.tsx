@@ -18,6 +18,7 @@ import { AgentTab } from './components/AgentTab'
 import { StageArtifacts } from './components/PendingCardParts'
 import { ArtifactTab } from './components/ArtifactTab'
 import { FileEditor } from './components/FileEditor'
+import { Composer } from './components/Composer'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -248,5 +249,22 @@ describe('产物页子头路径 / 文件页面包屑（#32 表面 10）', () => 
     await rightClick(host.querySelector('nav[aria-label="src/a.ts"]')!)
     expect(items()).toEqual(NO_OPEN)
     expect(api.openWithCandidates).toHaveBeenCalledWith('src/a.ts')
+  })
+})
+
+describe('输入条附件 chip（#32 表面 11）', () => {
+  it('右键 = 复制路径 · 在访达中显示 · 打开方式（无「打开」「插入」）', async () => {
+    useUiStore.setState({ mode: 'fastpath', fastRole: 'ops', team: [], pending: [], timeline: [] } as never)
+    vi.spyOn(api, 'stageAttachment').mockResolvedValue({ media_type: 'image/png', path: '.hexagon/inbox/att-1-x.png', bytes: 11, name: 'shot.png' })
+    const host = await render(<Composer />)
+    const ta = host.querySelector('textarea')!
+    const e = new Event('paste', { bubbles: true }) as ClipboardEvent
+    const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])], 'shot.png', { type: 'image/png' })
+    Object.defineProperty(e, 'clipboardData', { value: { files: [png] } })
+    await act(async () => { ta.dispatchEvent(e) })
+    await flush()
+    await rightClick(host.querySelector('[data-attach-path]')!)
+    expect(items()).toEqual(['copyPath', 'reveal', 'openWith'])
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/inbox/att-1-x.png')
   })
 })

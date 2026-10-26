@@ -79,9 +79,12 @@ export function FileContextMenu({ children, ...target }: FileMenuTarget & { chil
 }
 
 /** 一条表面路径 + 右键文件菜单（[`useProjectFileTarget`] + [`FileContextMenu`] 合一，给条件渲染的位置用）。 */
-export function ProjectFileMenu({ path, artifact, onOpen, kind, children }: {
-  path: string | null; artifact?: boolean; onOpen?: () => void; kind?: 'file' | 'dir'; children: ReactNode
+export function ProjectFileMenu({ path, artifact, onOpen, kind, noInsert, children }: {
+  path: string | null; artifact?: boolean; onOpen?: () => void; kind?: 'file' | 'dir'
+  /** 不给「插入到输入条」（输入条自己的附件 chip：已在输入条里）。 */
+  noInsert?: boolean
+  children: ReactNode
 }) {
   const target = useProjectFileTarget(path, { onOpen, kind, artifact })
-  return <FileContextMenu {...target}>{children}</FileContextMenu>
+  return <FileContextMenu {...target} insert={noInsert ? null : target.insert}>{children}</FileContextMenu>
 }
