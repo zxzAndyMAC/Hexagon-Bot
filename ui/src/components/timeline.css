@@ -301,11 +301,13 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
    伪元素不吃指针——否则放大后的刻度伸出按钮会把命中区一起带大，指针在轨道左缘外也算悬停。
    以右缘为原点向左伸（不推挤轨道外布局，轨道本体不伸长）。倍数由 NodeRail 写行内 --rail-mag。 */
 .tl .rail .tk::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%) scale(var(--rail-mag)); transform-origin: right center; border-radius: 2px; background: var(--ink-3); opacity: .55; pointer-events: none; transition: transform 150ms var(--ease); }
-.tl .rail .tk[data-tier="s"] { width: 24px; }
-.tl .rail .tk[data-tier="m"] { width: 16px; }
-.tl .rail .tk[data-tier="e"] { width: 10px; }
+/* 2026-10-26 负责人裁决：刻度一律 16 宽，层级不再靠长度（原 s 24 / m 16 / e 10，鱼眼放大时长短混排显乱）；
+   关键节点 = 阶段里程碑（tier s：stage_started / stamped）改用 green 区分，负责人发言与事件同为中性色。 */
+.tl .rail .tk { width: 16px; }
 .tl .rail .tk[data-hl="in"]::before { background: var(--ink-2); opacity: 1; }
 .tl .rail .tk[data-hl="cur"]::before, .tl .rail .tk:focus-visible::before { background: var(--ink); opacity: 1; height: 2.5px; }
+.tl .rail .tk[data-tier="s"]::before { background: var(--green); opacity: .75; }
+.tl .rail .tk[data-tier="s"][data-hl]::before { opacity: 1; }
 .tl .rail .tk[data-tone="warn"]::before { background: var(--orange); opacity: 1; }
 .tl .rail .tk[data-tone="err"]::before { background: var(--red); opacity: 1; }
 .tl .rail .tk[data-tone="mg"]::before { background: var(--accent); opacity: .9; }

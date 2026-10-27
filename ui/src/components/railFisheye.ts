@@ -2,13 +2,14 @@
 // 仿 macOS 程序坞放大：指针纵向距离 → 刻度倍数。纯函数，组件只负责量位置、写 --rail-mag。
 //
 // 取值出处（规范 interaction §5）：
-// - max 1.5：阶段刻度 24 → 36，从轨道右内边起向左伸，恰好伸到轨道左缘外 6px = 预览卡留的缝，不压卡。
-//   试过 1.8（原生程序坞观感）：阶段刻度 43 宽，伸进预览卡底下被遮，否决。
+// - max 1.75：刻度统一 16 宽（2026-10-26 负责人裁决，原按层级 24 / 16 / 10），16 → 28，从轨道右内边起向左伸，
+//   恰好伸到轨道左缘外 6px = 预览卡留的缝，不压卡（可伸余量 = 轨道左内距 6 + 卡缝 6 = 12）。
+//   旧值 1.5 对应阶段刻度 24 → 36；试过 24 宽下 1.8（43 宽）伸进预览卡底下被遮，否决。
 // - radius 32px：刻度间距 9（C15），半径内约 3.5 道，中心一道最大、两侧各 3 道递减。
 // - 升余弦衰减：中心与半径边缘斜率都是 0，指针扫过时倍数连续、没有台阶（线性衰减在中心有尖角，否决）。
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 
-export const FISHEYE = { max: 1.5, radius: 32 } as const
+export const FISHEYE = { max: 1.75, radius: 32 } as const
 
 /** 指针到刻度中心的纵向距离（px）→ 倍数。半径外恒为 1，中心为 max，之间单调递减。 */
 export function fisheyeScale(distance: number): number {
